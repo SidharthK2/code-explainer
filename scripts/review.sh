@@ -4,6 +4,7 @@
 #   review.sh health                    Exit 0 if the extension is running
 #   review.sh review <json_file>        Send a set_review message from a file
 #   review.sh send <json_string>        Send a raw JSON message
+#   review.sh diff [base]               Hunks computed by the extension (ids, files, ranges, patches) vs base (default HEAD)
 #   review.sh state                     Current review state (includes current hunk)
 #   review.sh resolve <hunk_id> [text]  Mark a hunk fixed, with a one-line note shown under the reviewer note
 #   review.sh goto <hunk_id>            Move the reviewer to a hunk
@@ -81,6 +82,9 @@ case "$1" in
         [ -z "$2" ] && { echo "Usage: review.sh send '<json>'" >&2; exit 1; }
         post -d "$2"
         ;;
+    diff)
+        curl -s -H "$AUTH_HEADER" "$BASE/api/diff?base=${2:-HEAD}"
+        ;;
     state)
         curl -s -H "$AUTH_HEADER" "$BASE/api/state"
         ;;
@@ -100,7 +104,7 @@ case "$1" in
         post -d '{"type":"close"}'
         ;;
     *)
-        sed -n '2,11p' "$0" >&2
+        sed -n '2,12p' "$0" >&2
         exit 1
         ;;
 esac

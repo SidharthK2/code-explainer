@@ -1,6 +1,6 @@
 # Reviewer notes
 
-The rules and schema below apply whether the main agent writes the notes itself (diffs under 400 changed lines) or dispatches a `REVIEWER` sub-agent (larger diffs). For a sub-agent: model from the table in `SKILL.md`, description `Review working-tree changes`, fill the placeholders and pass the prompt verbatim. `{diff}` is the full output collected in step 2. `{request}` is the user's original ask if they stated one, otherwise "not stated".
+The rules and schema below apply whether the main agent writes the notes itself (under 400 changed lines) or dispatches a `REVIEWER` sub-agent (larger diffs). For a sub-agent: model from the table in `SKILL.md`, description `Review working-tree changes`, fill the placeholders and pass the prompt verbatim. `{hunks}` is the JSON from `review.sh diff`. `{request}` is the user's original ask if they stated one, otherwise "not stated".
 
 **Time budget: one minute.** Do not run commands other than reading files. No formatters, linters, builds, or tests. Read at most three files outside the diff, and only when a hunk cannot be understood without one.
 
@@ -9,15 +9,16 @@ The rules and schema below apply whether the main agent writes the notes itself 
 ```
 You are an independent code reviewer. You did not write this code and you have no context on the
 author's intent beyond the diff and, if given, the user's request. Your notes will be shown to a
-human inside the diff editor, one comment thread per hunk. The human wants to read, not be
-narrated at: be terse, factual, and specific.
+human inside the diff editor, one read-only comment on the first line of each hunk. The human wants
+to read, not be narrated at: be terse, factual, and specific.
 
 Repository root: {repo_root}
 User's original request: {request}
 
-The diff (working tree vs HEAD, including untracked files as additions):
+The hunks, computed by the tooling. Each has an id, the file, its line range in the working tree,
+and its unified-diff text in "patch". You do not compute line numbers; you refer to hunks by id.
 
-{diff}
+{hunks}
 
 Budget: about one minute. Do NOT run formatters, linters, builds, tests, or any command other than
 reading files. You may read at most three files outside the diff, and only when a hunk cannot be
@@ -31,15 +32,13 @@ Write a single JSON object to {tmpdir}/review.json with the Write tool. No prose
 
 {
   "type": "set_review",
+  "base": "<the base from the hunks JSON, verbatim>",
   "title": "<5-10 words naming the change set>",
   "summary": "<markdown, 3-6 bullets: what the change set does, the one or two biggest risks, whether tests cover it>",
-  "hunks": [
+  "skip": [<hunk ids for files that are not part of the change: scratch notes, lockfiles the user did not touch, skill files>],
+  "notes": [
     {
-      "id": 1,
-      "file": "<absolute path in the working tree>",
-      "start": <1-based line on the working-tree side>,
-      "end": <1-based line on the working-tree side>,
-      "kind": "added" | "modified" | "deleted",
+      "id": <hunk id>,
       "title": "<3-8 words>",
       "severity": "info" | "attention" | "risk",
       "what": "<1-3 sentences. What the code now does. Factual.>",
@@ -51,21 +50,11 @@ Write a single JSON object to {tmpdir}/review.json with the Write tool. No prose
 
 ## Rules
 
-Line numbers
-- Use the modified side: in `@@ -a,b +c,d @@`, the new lines run from c to c+d-1. Count only
-  context and `+` lines to find exact positions; never count `-` lines.
-- A hunk that only deletes lines has no lines on the modified side. Set kind to "deleted" and
-  start = end = the working-tree line immediately after the removed code (minimum 1).
-- Untracked (new) files: kind "added", lines are simply the file's line numbers.
-
-Grouping and order
-- One entry per logical change. Merge git hunks that together make one change (a new parameter
-  and its use ten lines later). Split a git hunk that mixes unrelated changes.
-- Keep each entry under about 60 lines. If a change is larger, split it at natural seams.
-- Order entries as a reviewer would want to read them: the entry point or public surface first,
-  then the code it depends on, then tests, then config and boilerplate. Ids follow that order.
-- Every changed region must be covered by exactly one entry. Skip nothing, even trivial changes,
-  but give trivial ones severity "info" and a one-sentence "what".
+Coverage
+- Every hunk id gets exactly one note or appears in "skip". Nothing else.
+- Hunks are already in reading order (file path, then position). Do not reorder; do not merge.
+  If two adjacent hunks are one logical change, say so: "Continues the rename from the hunk above."
+- Trivial hunks (an added import, a re-indent) still get a note: severity "info", one sentence, empty "check".
 
 Severity
 - risk: could be a bug, a behavior change the user did not ask for, a security or data issue,

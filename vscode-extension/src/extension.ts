@@ -14,6 +14,7 @@ import {
 } from "./diff";
 import { clearHighlights, disposeHighlights, markActiveHunk } from "./highlight";
 import type { AgentMessage, FromWebviewMessage, Hunk } from "./types";
+import type { ResolvedSetReview } from "./server";
 
 const ACTIVE_CONTEXT = "codeReviewer.reviewActive";
 
@@ -131,10 +132,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// ── Agent messages ──
 
-	server.setMessageHandler((msg: AgentMessage) => {
+	server.setMessageHandler((msg: AgentMessage | ResolvedSetReview) => {
 		switch (msg.type) {
 			case "set_review": {
-				const hunks = absolutize(msg.hunks);
+				const hunks = absolutize((msg as ResolvedSetReview).hunks);
 				review.setReview(msg.title, msg.summary, hunks, msg.base || "HEAD");
 				comments.setReview(hunks, (id) => review.getHunkState(id), review.getCurrent()?.id);
 				sidebar.reveal();

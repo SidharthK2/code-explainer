@@ -33,14 +33,27 @@ export type ReviewStatus = "idle" | "active" | "closed";
 
 // ── Agent → Extension messages (HTTP + WS) ──
 
+/** A note for one hunk id returned by GET /api/diff. The extension owns the ranges; the agent owns the words. */
+export interface HunkNote {
+	id: number;
+	title: string;
+	severity: Severity;
+	what: string;
+	why: string;
+	check?: string;
+}
+
 export interface SetReviewMessage {
 	type: "set_review";
 	title: string;
 	/** Markdown summary of the whole change set. */
 	summary: string;
-	/** Git ref or sha the working tree is compared against. Default "HEAD". Shown on the left side of the diff. */
+	/** Must match the base of the last GET /api/diff. Default "HEAD". */
 	base?: string;
-	hunks: Hunk[];
+	/** One note per hunk id from GET /api/diff. Every id must be either noted or skipped. */
+	notes: HunkNote[];
+	/** Hunk ids to leave out of the review (scratch files, generated output). */
+	skip?: number[];
 }
 
 export interface GotoMessage {

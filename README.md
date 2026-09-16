@@ -20,7 +20,7 @@
 
 - **Side-by-side diff** — Uses VS Code's native diff editor, `HEAD` on the left and the working tree on the right. New and deleted files included. The right side is the real file, so you can edit while you review. On the first review the extension offers to pin side-by-side rendering, since VS Code otherwise switches to an inline diff in narrow editors.
 - **One note per change** — A read-only GitHub-style comment anchored to each hunk with fixed fields: **what changed**, **why**, **check**. Tagged `info`, `attention`, or `risk`. No reply box: conversation stays in chat.
-- **Ordered pass** — The reviewer orders hunks as a story: entry point first, dependencies next, tests and config last. `Ctrl+Shift+]` steps through and marks the hunk reviewed.
+- **Reads like a pull request** — Hunks come straight from git, in file order, top to bottom, with exact line ranges computed by the extension. The agent only writes the words. `Ctrl+Shift+]` steps through and marks the hunk reviewed.
 - **Chat knows where you are** — Say "why 30 seconds?" or "fix that" in your agent's chat. It reads the current hunk from the extension, answers in chat, and after a fix the note in the diff shows a one-line fixed mark.
 - **Fast** — Small diffs are annotated directly by the agent that already has the diff, no sub-agent, no tooling runs. Diffs over 400 lines go to a Sonnet sub-agent that reads only the diff and is capped at three extra file reads.
 - **Minimal sidebar** — Change-set summary, progress, and a per-file hunk list with severity dots and reviewed checkboxes.
@@ -83,8 +83,8 @@ or naturally: "review what you just changed", "check the diff before I commit".
 
 What happens:
 
-1. The agent collects `git diff HEAD` plus untracked files.
-2. The agent writes ordered hunk notes as JSON, itself for small diffs or via a `REVIEWER` sub-agent for large ones.
+1. The extension computes the hunks from git (working tree vs `HEAD`, or vs the merge-base for `/review main`), untracked files included.
+2. The agent writes one note per hunk as JSON, itself for small diffs or via a `REVIEWER` sub-agent for large ones. Scratch files can be skipped.
 3. The extension opens the first file's diff, anchors a note to each hunk, and shows the summary in the sidebar. The agent returns control to you.
 4. You step through in VS Code. Questions and fix requests go in chat; the agent knows the hunk you are on. Fixed hunks get a one-line mark in the diff.
 5. Say "done" and the agent closes the review with a short wrap-up.
@@ -123,7 +123,8 @@ Coding Agent ──HTTP──▶ Extension Server ──▶ Review state ──�
 | Component | File | Role |
 |-----------|------|------|
 | Skill | `SKILL.md`, `docs/reviewer.md` | Agent checklist and the reviewer sub-agent prompt |
-| Helper | `scripts/review.sh` | CLI over the HTTP API: `review`, `state`, `resolve`, `goto`, `close` |
+| Helper | `scripts/review.sh` | CLI over the HTTP API: `diff`, `review`, `state`, `resolve`, `goto`, `close` |
+| Hunks | `src/gitdiff.ts` | Runs and parses `git diff`, computes exact new-side ranges, includes untracked files |
 | Server | `src/server.ts` | HTTP + WebSocket on localhost with bearer token, schema validation |
 | Review state | `src/review.ts` | Hunks, current position, reviewed / flagged / resolved per hunk |
 | Diff | `src/diff.ts` | `HEAD` content provider and `vscode.diff` opening with the hunk revealed |
@@ -152,7 +153,8 @@ code-explainer/
     │   ├── extension.ts         # Wiring: events, commands, agent messages
     │   ├── server.ts            # HTTP + WS server
     │   ├── review.ts            # Review state machine
-    │   ├── diff.ts              # Git HEAD provider, open diff
+    │   ├── gitdiff.ts           # git diff parsing, hunk ranges
+│   ├── diff.ts              # Base content provider, open diff editor
     │   ├── comments.ts          # Comment threads
     │   ├── highlight.ts         # Active-hunk decoration
     │   ├── sidebar.ts           # Webview provider

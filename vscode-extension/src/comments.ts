@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { hunkRange, modifiedSideUri } from "./diff";
+import { modifiedSideUri } from "./diff";
 import type { Hunk, HunkState, Severity } from "./types";
 
 export const CONTROLLER_ID = "codeReviewer";
@@ -15,6 +15,12 @@ const SEVERITY_ICON: Record<Severity, string> = {
 	attention: "$(warning)",
 	risk: "$(error)",
 };
+
+/** Threads sit on the first changed line, like a GitHub comment on the line where the change begins. */
+function anchorRange(hunk: Hunk): vscode.Range {
+	const line = Math.max(0, hunk.start - 1);
+	return new vscode.Range(line, 0, line, 0);
+}
 
 function noteBody(hunk: Hunk, state: HunkState): vscode.MarkdownString {
 	const md = new vscode.MarkdownString(undefined, true);
@@ -48,7 +54,7 @@ export class ReviewComments {
 	}
 
 	private createThread(hunk: Hunk, state: HunkState, active: boolean): void {
-		const thread = this.controller.createCommentThread(modifiedSideUri(hunk.file), hunkRange(hunk), [
+		const thread = this.controller.createCommentThread(modifiedSideUri(hunk.file), anchorRange(hunk), [
 			{
 				body: noteBody(hunk, state),
 				mode: vscode.CommentMode.Preview,
@@ -88,7 +94,7 @@ export class ReviewComments {
 			...rest,
 		];
 		thread.label = SEVERITY_LABEL[hunk.severity];
-		thread.range = hunkRange(hunk);
+		thread.range = anchorRange(hunk);
 		thread.state = state.resolved
 			? vscode.CommentThreadState.Resolved
 			: vscode.CommentThreadState.Unresolved;

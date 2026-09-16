@@ -15,6 +15,7 @@ so a window reload leaves the new instance reachable.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/health` | `{"status":"ok","workspaceRoot":"/abs/path"}` when the extension is up. Check that the root is the repo you are reviewing |
+| GET | `/api/diff?base=REF` | Computes the hunks for working tree vs `REF` (default `HEAD`), untracked files included as additions, in file order. Returns `{ base, repoRoot, hunks: [{ id, file, relPath, kind, start, end, added, removed, patch }], binaryFiles }`. `set_review` must follow a call to this |
 | GET | `/api/state` | Status, base, current hunk (full object), reviewed count, and a compact list of all hunks with their reviewed / resolved state. This is how the agent knows what "this hunk" means in chat |
 | POST | `/api/message` | One agent message (below). `400` with an `error` string when the schema is wrong |
 
@@ -22,19 +23,20 @@ so a window reload leaves the new instance reachable.
 
 ### `set_review`
 
+Notes keyed by the hunk ids from the last `GET /api/diff`. The extension owns file paths and line ranges; the agent owns the words.
+
 ```json
 {
   "type": "set_review",
-  "title": "Rate limiter for the public API",
   "base": "HEAD",
-  "summary": "- Adds a token-bucket limiter in front of `/api/*`\n- Risk: bucket size is per process, not shared\n- Tests cover refill but not burst",
-  "hunks": [
+  "title": "Rate limiter for the public API",
+  "summary": "- Adds a token-bucket limiter in front of `/api/*`
+- Risk: bucket size is per process, not shared
+- Tests cover refill but not burst",
+  "skip": [12],
+  "notes": [
     {
       "id": 1,
-      "file": "/abs/path/src/middleware/rateLimit.ts",
-      "start": 12,
-      "end": 41,
-      "kind": "added",
       "title": "Token bucket middleware",
       "severity": "attention",
       "what": "Every request takes one token; refills at `RATE_PER_SEC`. Returns 429 when empty.",
@@ -45,18 +47,17 @@ so a window reload leaves the new instance reachable.
 }
 ```
 
-- `base` (optional) is the git ref or sha the working tree is compared against, default `HEAD`. It is used for the left side of the diff editor. Pass the merge-base sha when reviewing a branch against `main`.
-- `file` may be workspace-relative; the extension resolves it against the first workspace folder.
-- `start` / `end` are 1-based lines on the **working-tree** side. For `kind: "deleted"` they point at the line just below the removed code.
-- `severity` is one of `info`, `attention`, `risk`. `check` may be an empty string.
-- Ids must be unique. Hunks are shown in array order.
+- `base` must equal the base of the last `GET /api/diff`, otherwise the call is rejected and the agent should fetch the diff again.
+- Every hunk id from the diff must appear in `notes` or in `skip`. The error message lists any missing ids.
+- `severity` is one of `info`, `attention`, `risk`. `check` may be omitted or empty.
+- Threads are anchored to each hunk's first changed line; the active-hunk decoration covers the whole range.
 
 ### Navigation and edits
 
 | Message | Fields | Effect |
 |---------|--------|--------|
 | `goto` | `hunkId` | Opens that hunk's diff and expands its thread |
-| `update_hunk` | `id`, `hunk` (partial) | Patches fields, moves the thread if the range changed. Use after a fix shifts lines |
+| `update_hunk` | `id`, `hunk` (partial) | Patches note fields (title, severity, what, why, check). Ranges are owned by the extension; VS Code moves threads as the document is edited |
 | `remove_hunks` | `ids` | Deletes threads and list entries |
 | `resolve` | `hunkId`, `text?` | Marks the thread resolved and the hunk fixed, showing `text` (one line, default "Fixed.") under the reviewer note |
 | `close` | | Ends the review, removes threads and decorations |
