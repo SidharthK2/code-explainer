@@ -5,7 +5,13 @@ description: "Use when the user asks to review changes, check the diff, or look 
 
 # Code Review
 
-Independent review of the working tree against `HEAD`, delivered as GitHub-style comment threads inside VS Code's side-by-side diff editor. The user reads; nothing is narrated. Questions and fix requests come back to you through the extension.
+Independent review of the working tree against a base (default `HEAD`), delivered as GitHub-style comment threads inside VS Code's side-by-side diff editor. The user reads; nothing is narrated. Questions and fix requests come back to you through the extension.
+
+**Base ref.** `/review` alone compares against `HEAD` (uncommitted work). If the user names a branch, tag, or sha (`/review main`, "compare with origin/main", "review the whole branch"), compare against the merge-base with that ref so the whole branch is reviewed:
+```bash
+git fetch -q origin <ref> 2>/dev/null; BASE=$(git merge-base HEAD <ref>)   # falls back to <ref> itself if merge-base fails
+```
+Use `$BASE` everywhere the steps below say `HEAD`, and put it in the `base` field of `set_review` so the diff editor's left side shows that commit.
 
 ## Models
 
@@ -25,7 +31,7 @@ Resolve the tier to the model name in this table when dispatching.
    git diff HEAD --unified=3
    git ls-files --others --exclude-standard          # untracked files count as additions
    ```
-   For each untracked file, include `git diff --no-index --unified=3 /dev/null <file>` so the reviewer sees its content. If everything is empty, tell the user there is nothing to review and stop.
+   For each untracked file, include `git diff --no-index --unified=3 /dev/null <file>` so the reviewer sees its content. Skip untracked files that are clearly not part of the change (editor scratch, notes, lockfiles the user did not touch) and say so in one line at the end. If everything is empty, tell the user there is nothing to review and stop.
 
 3. **Dispatch the reviewer:** read `docs/reviewer.md` and dispatch **one** `REVIEWER` sub-agent with that prompt, the diff text, and the repo root. Create `TMPDIR=$(mktemp -d)` and have the agent write `$TMPDIR/review.json`. The reviewer is independent: do not pass it your own reasoning about the change, only the diff and the user's original request if they gave one.
 
@@ -34,7 +40,7 @@ Resolve the tier to the model name in this table when dispatching.
    jq -e '.type == "set_review" and (.hunks | length) > 0 and ([.hunks[].id] | unique | length) == (.hunks | length)' "$TMPDIR/review.json"
    ~/.claude/skills/review/scripts/review.sh review "$TMPDIR/review.json"
    ```
-   A non-zero exit or an `{"error": ...}` body means the schema is wrong: see `docs/protocol.md`, fix, resend. Then tell the user, in one line: the review is open in the sidebar, `Ctrl+Shift+]` steps to the next hunk. Do **not** repeat the notes in the terminal.
+   A non-zero exit or an `{"error": ...}` body means the schema is wrong: see `docs/protocol.md`, fix, resend. `"Code Review extension not running"` means the VS Code window went away or reloaded: wait 20 seconds and retry once (the extension re-registers itself), then fall back to step 5. Then tell the user, in one line: the review is open in the sidebar, `Ctrl+Shift+]` steps to the next hunk. Do **not** repeat the notes in the terminal.
 
 5. **Terminal fallback (extension unavailable only):** print the summary, then each hunk as `### <file>:<start>-<end> — <title> [<severity>]` followed by what / why / check. Stop; there is no action loop.
 

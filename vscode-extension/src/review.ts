@@ -4,6 +4,7 @@ import type { Hunk, HunkState, HunkView, ReviewStatus } from "./types";
 export interface ReviewState {
 	title: string;
 	summary: string;
+	base: string;
 	hunks: HunkView[];
 	currentIndex: number;
 	status: ReviewStatus;
@@ -22,6 +23,7 @@ const freshState = (): HunkState => ({ reviewed: false, flagged: false, resolved
 export class Review extends EventEmitter {
 	private title = "";
 	private summary = "";
+	private base = "HEAD";
 	private hunks: Hunk[] = [];
 	private states = new Map<number, HunkState>();
 	private currentIndex = -1;
@@ -31,6 +33,7 @@ export class Review extends EventEmitter {
 		return {
 			title: this.title,
 			summary: this.summary,
+			base: this.base,
 			hunks: this.hunks.map((h) => ({ ...h, ...(this.states.get(h.id) ?? freshState()) })),
 			currentIndex: this.currentIndex,
 			status: this.status,
@@ -51,9 +54,14 @@ export class Review extends EventEmitter {
 
 	// ── Lifecycle ──
 
-	setReview(title: string, summary: string, hunks: Hunk[]): void {
+	getBase(): string {
+		return this.base;
+	}
+
+	setReview(title: string, summary: string, hunks: Hunk[], base = "HEAD"): void {
 		this.title = title;
 		this.summary = summary;
+		this.base = base;
 		this.hunks = hunks;
 		this.states = new Map(hunks.map((h) => [h.id, freshState()]));
 		this.currentIndex = hunks.length > 0 ? 0 : -1;

@@ -5,6 +5,8 @@ The extension runs an HTTP + WebSocket server on `127.0.0.1`, one per VS Code wi
 fallback files `~/.claude-reviewer-port` and `~/.claude-reviewer-token` (last window to activate wins).
 `scripts/review.sh` picks the endpoint whose root matches `git rev-parse --show-toplevel` of the current
 directory (override with `REVIEW_ROOT=/path`), and falls back to the global files. It wraps every call below.
+An instance only deletes files that point at itself, and rewrites its own every 15 seconds if they go missing,
+so a window reload leaves the new instance reachable.
 
 ## Endpoints
 
@@ -23,6 +25,7 @@ directory (override with `REVIEW_ROOT=/path`), and falls back to the global file
 {
   "type": "set_review",
   "title": "Rate limiter for the public API",
+  "base": "HEAD",
   "summary": "- Adds a token-bucket limiter in front of `/api/*`\n- Risk: bucket size is per process, not shared\n- Tests cover refill but not burst",
   "hunks": [
     {
@@ -41,6 +44,7 @@ directory (override with `REVIEW_ROOT=/path`), and falls back to the global file
 }
 ```
 
+- `base` (optional) is the git ref or sha the working tree is compared against, default `HEAD`. It is used for the left side of the diff editor. Pass the merge-base sha when reviewing a branch against `main`.
 - `file` may be workspace-relative; the extension resolves it against the first workspace folder.
 - `start` / `end` are 1-based lines on the **working-tree** side. For `kind: "deleted"` they point at the line just below the removed code.
 - `severity` is one of `info`, `attention`, `risk`. `check` may be an empty string.

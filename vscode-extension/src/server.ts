@@ -48,6 +48,7 @@ export class ReviewServer {
 	private authToken: string;
 	private onAgentMessage?: (msg: AgentMessage) => void;
 	private workspaceRoot: string;
+	private heartbeat: NodeJS.Timeout | undefined;
 
 	constructor(review: Review, workspaceRoot: string) {
 		this.review = review;
@@ -70,37 +71,67 @@ export class ReviewServer {
 			this.httpServer.listen(0, "127.0.0.1", () => {
 				const addr = this.httpServer.address();
 				this.port = typeof addr === "object" && addr ? addr.port : 0;
-				// Global files: last window to activate wins. Kept as a fallback for single-window use.
-				fs.writeFileSync(PORT_FILE, String(this.port), "utf-8");
-				fs.writeFileSync(TOKEN_FILE, this.authToken, { encoding: "utf-8", mode: 0o600 });
+				// Global files: last window to activate wins (fallback for single-window use).
 				// Per-workspace file: lets review.sh pick the window whose workspace matches the repo.
-				if (this.workspaceRoot) {
-					try {
-						fs.mkdirSync(ENDPOINTS_DIR, { recursive: true, mode: 0o700 });
-						fs.writeFileSync(
-							endpointFileFor(this.workspaceRoot),
-							JSON.stringify({ port: this.port, token: this.authToken, root: this.workspaceRoot, pid: process.pid }),
-							{ encoding: "utf-8", mode: 0o600 },
-						);
-					} catch (err) {
-						console.error("[code-reviewer] Could not write endpoint file:", err);
-					}
-				}
+				this.writeEndpointFiles();
+				this.heartbeat = setInterval(() => this.healEndpointFiles(), 15_000);
 				resolve(this.port);
 			});
 		});
 	}
 
 	stop(): void {
+		if (this.heartbeat) clearInterval(this.heartbeat);
 		for (const ws of this.wsClients) ws.close();
 		this.wss.close();
 		this.httpServer.close();
-		// Only remove the global files if they still point at this instance.
+		// Only remove files that still point at this instance. During a window reload the new
+		// extension host may already have written its own files; those must survive.
 		try { if (fs.readFileSync(PORT_FILE, "utf-8").trim() === String(this.port)) fs.unlinkSync(PORT_FILE); } catch {}
 		try { if (fs.readFileSync(TOKEN_FILE, "utf-8").trim() === this.authToken) fs.unlinkSync(TOKEN_FILE); } catch {}
 		if (this.workspaceRoot) {
-			try { fs.unlinkSync(endpointFileFor(this.workspaceRoot)); } catch {}
+			try {
+				const f = endpointFileFor(this.workspaceRoot);
+				const cur = JSON.parse(fs.readFileSync(f, "utf-8")) as { pid?: number };
+				if (cur.pid === process.pid) fs.unlinkSync(f);
+			} catch {}
 		}
+	}
+
+	/** Write the endpoint files. Called on start and periodically, so a stale cleanup cannot leave a live server unreachable. */
+	private writeEndpointFiles(): void {
+		try {
+			fs.writeFileSync(PORT_FILE, String(this.port), "utf-8");
+			fs.writeFileSync(TOKEN_FILE, this.authToken, { encoding: "utf-8", mode: 0o600 });
+		} catch (err) {
+			console.error("[code-reviewer] Could not write port/token files:", err);
+		}
+		if (!this.workspaceRoot) return;
+		try {
+			fs.mkdirSync(ENDPOINTS_DIR, { recursive: true, mode: 0o700 });
+			fs.writeFileSync(
+				endpointFileFor(this.workspaceRoot),
+				JSON.stringify({ port: this.port, token: this.authToken, root: this.workspaceRoot, pid: process.pid }),
+				{ encoding: "utf-8", mode: 0o600 },
+			);
+		} catch (err) {
+			console.error("[code-reviewer] Could not write endpoint file:", err);
+		}
+	}
+
+	/** Re-create missing files. Leaves files that point at another live instance alone, except the per-workspace one, which is ours by definition. */
+	private healEndpointFiles(): void {
+		const globalMissing = !fs.existsSync(PORT_FILE) || !fs.existsSync(TOKEN_FILE);
+		let mineMissing = false;
+		if (this.workspaceRoot) {
+			try {
+				const cur = JSON.parse(fs.readFileSync(endpointFileFor(this.workspaceRoot), "utf-8")) as { pid?: number; port?: number };
+				mineMissing = cur.port !== this.port;
+			} catch {
+				mineMissing = true;
+			}
+		}
+		if (globalMissing || mineMissing) this.writeEndpointFiles();
 	}
 
 	/** Queue a user action for the agent (delivered via long-poll or WS). */
@@ -203,6 +234,7 @@ export class ReviewServer {
 			JSON.stringify({
 				...this.stateMessage(),
 				title: state.title,
+				base: state.base,
 				currentIndex: state.currentIndex,
 				hunk: current,
 				hunks: state.hunks.map(({ id, file, start, end, title, severity, reviewed, flagged, resolved }) => ({
@@ -271,6 +303,7 @@ export class ReviewServer {
 			case "set_review": {
 				if (typeof m.title !== "string") return "set_review: 'title' must be a string";
 				if (typeof m.summary !== "string") return "set_review: 'summary' must be a string";
+				if (m.base !== undefined && (typeof m.base !== "string" || !/^[\w./~^@-]+$/.test(m.base))) return "set_review: 'base' must be a git ref or sha";
 				if (!Array.isArray(m.hunks)) return "set_review: 'hunks' must be an array";
 				const bad = (m.hunks as unknown[]).findIndex((h) => !isHunk(h));
 				if (bad !== -1) return `set_review: hunks[${bad}] is missing a required field (id, file, start, end, title, severity, what, why) or has an invalid severity`;

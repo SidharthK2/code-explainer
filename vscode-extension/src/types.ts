@@ -38,6 +38,8 @@ export interface SetReviewMessage {
 	title: string;
 	/** Markdown summary of the whole change set. */
 	summary: string;
+	/** Git ref or sha the working tree is compared against. Default "HEAD". Shown on the left side of the diff. */
+	base?: string;
 	hunks: Hunk[];
 }
 

@@ -28,8 +28,9 @@ export class GitHeadContentProvider implements vscode.TextDocumentContentProvide
 		const root = await repoRoot(path.dirname(file));
 		if (!root) return "";
 		const rel = path.relative(root, file).split(path.sep).join("/");
-		const r = await git(root, ["show", `HEAD:${rel}`]);
-		// A file that does not exist at HEAD is an addition; show an empty left side.
+		const ref = uri.query || "HEAD";
+		const r = await git(root, ["show", `${ref}:${rel}`]);
+		// A file that does not exist at the base is an addition; show an empty left side.
 		return r.ok ? r.out : "";
 	}
 }
@@ -56,10 +57,11 @@ export function hunkRange(hunk: Hunk): vscode.Range {
  * Open the side-by-side diff (HEAD vs working tree) for a hunk's file and reveal the hunk.
  * Returns the editor for the modified side when VS Code exposes it.
  */
-export async function openHunkDiff(hunk: Hunk): Promise<vscode.TextEditor | undefined> {
+export async function openHunkDiff(hunk: Hunk, base = "HEAD"): Promise<vscode.TextEditor | undefined> {
 	const right = modifiedSideUri(hunk.file);
-	const left = vscode.Uri.file(hunk.file).with({ scheme: GIT_HEAD_SCHEME, query: "HEAD" });
-	const title = `${path.basename(hunk.file)} (HEAD ↔ Working Tree)`;
+	const left = vscode.Uri.file(hunk.file).with({ scheme: GIT_HEAD_SCHEME, query: base });
+	const shortBase = /^[0-9a-f]{40}$/.test(base) ? base.slice(0, 8) : base;
+	const title = `${path.basename(hunk.file)} (${shortBase} ↔ Working Tree)`;
 	const range = hunkRange(hunk);
 
 	await vscode.commands.executeCommand("vscode.diff", left, right, title, {

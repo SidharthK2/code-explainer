@@ -34,7 +34,7 @@ if command -v shasum &>/dev/null; then
 fi
 if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
     if [ ! -f "$PORT_FILE" ] || [ ! -f "$TOKEN_FILE" ]; then
-        echo '{"error": "Code Review extension not running (no port/token file)"}' >&2
+        echo "{\"error\": \"Code Review extension not running for $ROOT. Is that folder open in VS Code with the Code Review extension installed? If the window just reloaded, wait 20s and retry.\"}" >&2
         exit 1
     fi
     PORT=$(cat "$PORT_FILE")

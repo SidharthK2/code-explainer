@@ -50,7 +50,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	async function showHunk(hunk: Hunk): Promise<void> {
 		const gen = ++showGeneration;
 		try {
-			const editor = await openHunkDiff(hunk);
+			const editor = await openHunkDiff(hunk, review.getBase());
 			if (gen !== showGeneration) return;
 			if (editor) markActiveHunk(editor, hunkRange(hunk));
 			comments.setActive(hunk.id);
@@ -165,7 +165,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		switch (msg.type) {
 			case "set_review": {
 				const hunks = absolutize(msg.hunks);
-				review.setReview(msg.title, msg.summary, hunks);
+				review.setReview(msg.title, msg.summary, hunks, msg.base || "HEAD");
 				comments.setReview(hunks, (id) => review.getHunkState(id), review.getCurrent()?.id);
 				sidebar.reveal();
 				offerSideBySide().catch(() => {});
