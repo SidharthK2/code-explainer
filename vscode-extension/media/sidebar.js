@@ -1,668 +1,156 @@
 // @ts-check
+(function () {
+	const vscode = acquireVsCodeApi();
 
-/** @type {ReturnType<typeof acquireVsCodeApi>} */
-const vscode = acquireVsCodeApi();
+	/** @type {{ title: string, summary: string, hunks: any[], currentHunk: number, status: string, workspaceRoot: string }} */
+	let state = { title: "", summary: "", hunks: [], currentHunk: -1, status: "idle", workspaceRoot: "" };
 
-// ── State ──
+	const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 
-let state = {
-	title: "",
-	segments: [],
-	currentSegment: -1,
-	status: "idle",
-};
-
-// ── Audio player ──
-
-/** @type {AudioContext | null} */
-let audioCtx = null;
-/** @type {GainNode | null} */
-let gainNode = null;
-let nextPlayTime = 0;
-/** @type {AudioBufferSourceNode[]} */
-let activeSources = [];
-// Speed is handled by TTS server; Web Audio plays at 1x
-let volume = 0.8;
-let muted = false;
-let audioPlaying = false;
-/** True when audio was intentionally suspended via suspendAudio() (user pause). */
-let intentionallySuspended = false;
-let currentHighlightIndex = 0;
-let totalHighlights = 0;
-/** True when audio_end arrived but chunks are still pending (AudioContext suspended) */
-let deferredPlaybackComplete = false;
-/** Guard: true while waitForActiveSourcesToFinish has a pending wrapper or sent playback_complete */
-let playbackCompleteWired = false;
-
-/** @type {{base64: string, sampleRate: number}[]} */
-let pendingChunks = [];
-
-function ensureAudioContext() {
-	if (!audioCtx) {
-		audioCtx = new AudioContext({ sampleRate: 24000 });
-		gainNode = audioCtx.createGain();
-		gainNode.gain.value = muted ? 0 : volume;
-		gainNode.connect(audioCtx.destination);
+	function escapeHtml(s) {
+		return String(s)
+			.replace(/&/g, "&amp;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;")
+			.replace(/"/g, "&quot;");
 	}
-	if (audioCtx.state === "suspended" && !intentionallySuspended) {
-		audioCtx.resume().then(() => {
-			// Flush any chunks that arrived while suspended
-			const chunks = pendingChunks.slice();
-			pendingChunks = [];
-			for (const chunk of chunks) {
-				playAudioChunk(chunk.base64, chunk.sampleRate);
+
+	/** Small markdown subset: paragraphs, bullets, bold, italics, inline code. */
+	function simpleMarkdown(text) {
+		const lines = escapeHtml(text || "").split(/\r?\n/);
+		let html = "";
+		let inList = false;
+		for (const raw of lines) {
+			const line = raw.trim();
+			const bullet = /^[-*]\s+(.*)$/.exec(line);
+			if (bullet) {
+				if (!inList) { html += "<ul>"; inList = true; }
+				html += `<li>${inline(bullet[1])}</li>`;
+				continue;
 			}
-			// If audio_end arrived while suspended, now handle deferred playback completion
-			if (deferredPlaybackComplete) {
-				deferredPlaybackComplete = false;
-				waitForActiveSourcesToFinish();
-			}
-		});
-	}
-}
-
-// Pre-warm AudioContext on first user interaction so it's ready when audio arrives
-document.addEventListener("click", () => ensureAudioContext(), { once: true });
-
-
-function playAudioChunk(base64Data, sampleRate) {
-	ensureAudioContext();
-
-	// If AudioContext is still suspended (no user gesture yet), queue the chunk
-	if (audioCtx.state === "suspended") {
-		pendingChunks.push({ base64: base64Data, sampleRate });
-		return;
-	}
-
-	const binary = atob(base64Data);
-	const bytes = new Uint8Array(binary.length);
-	for (let i = 0; i < binary.length; i++) {
-		bytes[i] = binary.charCodeAt(i);
-	}
-	const float32 = new Float32Array(bytes.buffer);
-
-	const buffer = audioCtx.createBuffer(1, float32.length, sampleRate);
-	buffer.getChannelData(0).set(float32);
-
-	const source = audioCtx.createBufferSource();
-	source.buffer = buffer;
-	source.playbackRate.value = 1;
-	source.connect(gainNode);
-
-	const now = audioCtx.currentTime;
-	if (nextPlayTime < now) nextPlayTime = now;
-	source.start(nextPlayTime);
-	nextPlayTime += buffer.duration;
-
-	activeSources.push(source);
-	source.onended = () => {
-		const idx = activeSources.indexOf(source);
-		if (idx !== -1) activeSources.splice(idx, 1);
-		vscode.postMessage({ type: "chunk_played" });
-	};
-
-	audioPlaying = true;
-}
-
-function stopAudio() {
-	intentionallySuspended = false;
-	for (const source of activeSources) {
-		// Clear onended BEFORE stopping to prevent stale playback_complete messages.
-		// Without this, wrapped onended callbacks (from waitForActiveSourcesToFinish)
-		// fire and send playback_complete which can resolve the NEXT chunk's promise,
-		// causing the highlight loop to skip subsegments and leak orphaned TTS streams.
-		source.onended = null;
-		try { source.stop(); } catch {}
-	}
-	activeSources = [];
-	pendingChunks = [];
-	nextPlayTime = 0;
-	audioPlaying = false;
-	deferredPlaybackComplete = false;
-	playbackCompleteWired = false;
-}
-
-/** Suspend AudioContext to freeze audio in place (pause mid-highlight). */
-function suspendAudio() {
-	if (audioCtx && audioCtx.state === "running") {
-		intentionallySuspended = true;
-		audioCtx.suspend();
-	}
-	// Don't clear sources or nextPlayTime — we want to resume from here
-}
-
-/** Resume AudioContext and wait for remaining buffered audio to finish. */
-function resumeAudio() {
-	intentionallySuspended = false;
-	if (audioCtx && audioCtx.state === "suspended") {
-		// Always resume the AudioContext so subsequent playAudioChunk() calls
-		// don't silently push to pendingChunks instead of playing.
-		audioCtx.resume().then(() => {
-			waitForActiveSourcesToFinish();
-		});
-	} else {
-		// Nothing to resume — signal immediately so extension can re-stream
-		vscode.postMessage({ type: "playback_complete" });
-	}
-}
-
-/**
- * Wait for all active audio sources to finish, then send playback_complete.
- * If no sources are active (already drained), sends immediately.
- * Idempotent: safe to call multiple times (onAudioEnd + resumeAudio) —
- * only the first call wires the wrapper; subsequent calls are no-ops.
- */
-function waitForActiveSourcesToFinish() {
-	if (playbackCompleteWired || intentionallySuspended) return;
-	playbackCompleteWired = true;
-	if (activeSources.length === 0) {
-		audioPlaying = false;
-		playbackCompleteWired = false;
-		vscode.postMessage({ type: "playback_complete" });
-		return;
-	}
-	const lastSource = activeSources[activeSources.length - 1];
-	const originalOnEnded = lastSource.onended;
-	lastSource.onended = (e) => {
-		if (originalOnEnded) originalOnEnded.call(lastSource, e);
-		audioPlaying = false;
-		playbackCompleteWired = false;
-		vscode.postMessage({ type: "playback_complete" });
-	};
-}
-
-function onAudioEnd() {
-	// Wait for actual Web Audio playback to finish,
-	// then signal the extension so it can advance to the next sub-highlight.
-	// If chunks are still pending (AudioContext suspended), defer until they're flushed.
-	if (pendingChunks.length > 0) {
-		deferredPlaybackComplete = true;
-		return;
-	}
-	waitForActiveSourcesToFinish();
-}
-
-function updateVolume() {
-	if (gainNode) {
-		gainNode.gain.value = muted ? 0 : volume;
-	}
-}
-
-// ── UI rendering ──
-
-function showDoneView() {
-	document.getElementById("idle-view").style.display = "none";
-	document.getElementById("active-view").style.display = "none";
-	document.getElementById("done-view").style.display = "";
-	document.getElementById("done-summary").textContent =
-		`${state.segments.length} segments covered`;
-}
-
-function render() {
-	const idleView = document.getElementById("idle-view");
-	const activeView = document.getElementById("active-view");
-	const doneView = document.getElementById("done-view");
-
-	if (state.status === "idle") {
-		idleView.style.display = "";
-		activeView.style.display = "none";
-		doneView.style.display = "none";
-		vscode.postMessage({ type: "request_saved_list" });
-		return;
-	}
-
-	if (state.status === "stopped") {
-		idleView.style.display = "";
-		activeView.style.display = "none";
-		doneView.style.display = "none";
-		vscode.postMessage({ type: "request_saved_list" });
-		return;
-	}
-
-	idleView.style.display = "none";
-	activeView.style.display = "";
-	doneView.style.display = "none";
-
-	// Title
-	document.getElementById("walkthrough-title").textContent = state.title;
-
-	// Now playing
-	const seg = state.segments.find((s) => s.id === state.currentSegment);
-	const idx = state.segments.findIndex((s) => s.id === state.currentSegment);
-
-	if (seg) {
-		document.getElementById("segment-title").textContent = seg.title;
-
-		const loc = document.getElementById("segment-location");
-		const fileName = seg.file.split("/").pop();
-		loc.textContent = `${fileName}:${seg.start}-${seg.end}`;
-		loc.dataset.file = seg.file;
-		loc.dataset.start = String(seg.start);
-		loc.dataset.end = String(seg.end);
-	}
-
-	// Play/pause button (SVG icon toggle)
-	const playBtn = document.getElementById("btn-play-pause");
-	const iconPlay = playBtn.querySelector(".icon-play");
-	const iconPause = playBtn.querySelector(".icon-pause");
-	if (state.status === "playing") {
-		iconPlay.style.display = "none";
-		iconPause.style.display = "";
-	} else {
-		iconPlay.style.display = "";
-		iconPause.style.display = "none";
-	}
-	playBtn.title = state.status === "playing" ? "Pause" : "Play";
-
-	// Pulse animation when paused (ready to play)
-	if (state.status === "paused") {
-		playBtn.classList.add("pulse");
-	} else {
-		playBtn.classList.remove("pulse");
-	}
-
-	// Explanation with fade transition
-	if (seg) {
-		const explEl = document.getElementById("explanation-text");
-		explEl.classList.add("fade-out");
-		setTimeout(() => {
-			explEl.innerHTML = simpleMarkdown(seg.explanation);
-			explEl.classList.remove("fade-out");
-		}, 150);
-	}
-
-	// Outline
-	renderOutline(idx);
-}
-
-function computeGlobalProgress() {
-	if (state.segments.length === 0) {
-		return { current: 0, total: 0 };
-	}
-	let totalGlobalHighlights = 0;
-	let completedHighlights = 0;
-	const currentIdx = state.segments.findIndex(s => s.id === state.currentSegment);
-
-	for (let i = 0; i < state.segments.length; i++) {
-		const seg = state.segments[i];
-		const segHighlights = (seg.highlights && seg.highlights.length > 0) ? seg.highlights.length : 1;
-		totalGlobalHighlights += segHighlights;
-
-		if (i < currentIdx) {
-			completedHighlights += segHighlights;
-		} else if (i === currentIdx) {
-			completedHighlights += currentHighlightIndex;
+			if (inList) { html += "</ul>"; inList = false; }
+			if (line) html += `<p>${inline(line)}</p>`;
 		}
+		if (inList) html += "</ul>";
+		return html;
 	}
 
-	return { current: completedHighlights + 1, total: totalGlobalHighlights };
-}
-
-function renderHighlightProgress() {
-	const counter = document.getElementById("segment-counter");
-	if (!counter) return;
-
-	const { current, total } = computeGlobalProgress();
-	if (total > 0) {
-		counter.textContent = `${current}/${total}`;
-	} else {
-		counter.textContent = "";
+	function inline(s) {
+		return s
+			.replace(/`([^`]+)`/g, "<code>$1</code>")
+			.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+			.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
 	}
 
-	// Update progress bar
-	const progressFill = document.getElementById("progress-fill");
-	if (progressFill && total > 0) {
-		const pct = (current / total) * 100;
-		progressFill.style.width = `${pct}%`;
+	function relPath(file) {
+		const root = state.workspaceRoot;
+		if (root && file.startsWith(root)) {
+			return file.slice(root.length).replace(/^[\\/]/, "");
+		}
+		return file;
 	}
 
-	// Update nav button icons based on current highlight count
-	updateNavIcons();
-}
+	function render() {
+		const idle = $("idle-view");
+		const active = $("active-view");
+		const closed = $("closed-view");
+		idle.style.display = state.status === "idle" ? "" : "none";
+		active.style.display = state.status === "active" ? "" : "none";
+		closed.style.display = state.status === "closed" ? "" : "none";
+		if (state.status !== "active") return;
 
-/** Track segment IDs used for the last full outline build */
-let outlineSegmentIds = [];
+		$("review-title").textContent = state.title;
+		$("summary").innerHTML = simpleMarkdown(state.summary);
 
-function renderOutline(currentIdx) {
-	const list = document.getElementById("outline-list");
+		const total = state.hunks.length;
+		const reviewed = state.hunks.filter((h) => h.reviewed).length;
+		const flagged = state.hunks.filter((h) => h.flagged).length;
+		$("progress-fill").style.width = total ? `${Math.round((reviewed / total) * 100)}%` : "0%";
+		$("progress-text").textContent =
+			`${reviewed}/${total} reviewed` + (flagged ? ` · ${flagged} flagged` : "");
 
-	const currentIds = state.segments.map(s => s.id);
-	const needsRebuild = currentIds.length !== outlineSegmentIds.length ||
-		currentIds.some((id, i) => id !== outlineSegmentIds[i]);
+		const idx = state.hunks.findIndex((h) => h.id === state.currentHunk);
+		/** @type {HTMLButtonElement} */ ($("btn-prev")).disabled = idx <= 0;
+		/** @type {HTMLButtonElement} */ ($("btn-next")).disabled = idx === -1 || idx >= total - 1;
 
-	if (needsRebuild) {
+		renderList();
+	}
+
+	function renderList() {
+		const list = $("hunk-list");
 		list.innerHTML = "";
-		outlineSegmentIds = currentIds;
+		let lastFile = null;
 
-		for (let i = 0; i < state.segments.length; i++) {
-			const seg = state.segments[i];
+		for (const hunk of state.hunks) {
+			if (hunk.file !== lastFile) {
+				const fileLi = document.createElement("li");
+				fileLi.className = "file-header";
+				fileLi.textContent = relPath(hunk.file);
+				fileLi.title = hunk.file;
+				list.appendChild(fileLi);
+				lastFile = hunk.file;
+			}
+
 			const li = document.createElement("li");
-			li.className = "outline-segment";
+			li.className = "hunk" +
+				(hunk.id === state.currentHunk ? " current" : "") +
+				(hunk.reviewed ? " reviewed" : "") +
+				(hunk.flagged ? " flagged" : "") +
+				(hunk.resolved ? " resolved" : "");
 
-			// Segment header (clickable)
-			const header = document.createElement("div");
-			header.className = "outline-segment-header";
-
-			const marker = document.createElement("span");
-			marker.className = "marker";
-
-			const text = document.createElement("span");
-			text.className = "segment-label";
-			text.textContent = `${i + 1}. ${seg.title}`;
-
-			const progress = document.createElement("span");
-			progress.className = "segment-progress";
-
-			header.appendChild(marker);
-			header.appendChild(text);
-			header.appendChild(progress);
-
-			// Clicking header navigates to segment
-			header.addEventListener("pointerdown", (e) => {
-				e.preventDefault();
-				vscode.postMessage({ type: "goto_segment", segmentId: seg.id });
+			const check = document.createElement("button");
+			check.className = "check";
+			check.title = hunk.reviewed ? "Mark as not reviewed" : "Mark as reviewed";
+			check.innerHTML = hunk.reviewed
+				? '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 3.5L6 11 2.5 7.5l1-1L6 9l6.5-6.5z"/></svg>'
+				: "";
+			check.addEventListener("click", (e) => {
+				e.stopPropagation();
+				vscode.postMessage({ type: "toggle_reviewed", hunkId: hunk.id });
 			});
 
-			li.appendChild(header);
+			const sev = document.createElement("span");
+			sev.className = `sev sev-${hunk.severity}`;
+			sev.title = hunk.severity;
+
+			const body = document.createElement("div");
+			body.className = "hunk-body";
+			const title = document.createElement("div");
+			title.className = "hunk-title";
+			title.textContent = hunk.title;
+			const meta = document.createElement("div");
+			meta.className = "hunk-meta";
+			const range = hunk.start === hunk.end ? `L${hunk.start}` : `L${hunk.start}–${hunk.end}`;
+			let status = "";
+			if (hunk.resolved) status = " · fixed";
+			else if (hunk.flagged) status = " · flagged";
+			meta.textContent = `${range}${hunk.kind === "deleted" ? " · deletion" : ""}${status}`;
+			body.appendChild(title);
+			body.appendChild(meta);
+
+			li.appendChild(check);
+			li.appendChild(sev);
+			li.appendChild(body);
+			li.addEventListener("click", () => vscode.postMessage({ type: "goto_hunk", hunkId: hunk.id }));
 			list.appendChild(li);
 		}
+
+		const current = list.querySelector(".hunk.current");
+		if (current) current.scrollIntoView({ block: "nearest" });
 	}
 
-	// Update state classes
-	const items = list.children;
-	for (let i = 0; i < items.length; i++) {
-		const li = items[i];
-		const header = li.querySelector(".outline-segment-header");
+	$("btn-prev").addEventListener("click", () => vscode.postMessage({ type: "prev" }));
+	$("btn-next").addEventListener("click", () => vscode.postMessage({ type: "next" }));
+	$("btn-finish").addEventListener("click", () => vscode.postMessage({ type: "finish" }));
+	$("btn-close").addEventListener("click", () => vscode.postMessage({ type: "close" }));
 
-		if (i === currentIdx) {
-			header.className = "outline-segment-header current";
-		} else if (i < currentIdx) {
-			header.className = "outline-segment-header completed";
-		} else {
-			header.className = "outline-segment-header";
-		}
-
-		const marker = li.querySelector(".marker");
-		if (i < currentIdx) marker.textContent = "\u2713";
-		else if (i === currentIdx) marker.textContent = "\u25B6";
-		else marker.textContent = "\u25CB";
-
-		// Update segment progress fraction
-		const progress = li.querySelector(".segment-progress");
-		const seg = state.segments[i];
-		const segTotal = (seg.highlights && seg.highlights.length > 0) ? seg.highlights.length : 1;
-		// For the current segment, prefer totalHighlights from highlight_advance
-		const total = (i === currentIdx && totalHighlights > 0) ? totalHighlights : segTotal;
-		if (total > 1) {
-			let completed;
-			if (i < currentIdx) completed = total;
-			else if (i === currentIdx) completed = currentHighlightIndex + 1;
-			else completed = 0;
-			progress.textContent = `${completed}/${total}`;
-		} else {
-			progress.textContent = "";
-		}
-	}
-}
-
-function simpleMarkdown(text) {
-	if (!text) return "";
-	return text
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-		.replace(/`(.+?)`/g, "<code>$1</code>")
-		.replace(/\n\n/g, "<br><br>")
-		.replace(/\n/g, "<br>");
-}
-
-// ── Hold-to-pause (spacebar) ──
-
-let holdPaused = false;
-
-// ── Shift modifier tracking ──
-
-let shiftHeld = false;
-
-function updateNavIcons() {
-	const showSegment = shiftHeld || totalHighlights <= 1;
-	document.querySelectorAll("#btn-prev, #btn-next").forEach((btn) => {
-		const highlightIcon = btn.querySelector(".icon-highlight");
-		const segmentIcon = btn.querySelector(".icon-segment");
-		if (highlightIcon && segmentIcon) {
-			highlightIcon.style.display = showSegment ? "none" : "";
-			segmentIcon.style.display = showSegment ? "" : "none";
-		}
-	});
-}
-
-document.addEventListener("keydown", (e) => {
-	if (e.key === "Shift" && !shiftHeld) {
-		shiftHeld = true;
-		updateNavIcons();
-	}
-	if (e.code === "Space" && !e.repeat) {
-		// Don't intercept space on interactive elements
-		if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") {
-			return;
-		}
-		e.preventDefault();
-		// Only hold-pause if currently playing (not if user-paused)
-		if (state.status === "playing" && !holdPaused) {
-			holdPaused = true;
-			ensureAudioContext();
-			vscode.postMessage({ type: "play_pause" });
-		}
-	}
-});
-
-document.addEventListener("keyup", (e) => {
-	if (e.key === "Shift") {
-		shiftHeld = false;
-		updateNavIcons();
-	}
-	if (e.code === "Space") {
-		// Don't intercept space on interactive elements
-		if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") {
-			return;
-		}
-		e.preventDefault();
-		if (holdPaused) {
-			holdPaused = false;
-			vscode.postMessage({ type: "play_pause" });
-		}
-	}
-});
-
-window.addEventListener("blur", () => {
-	holdPaused = false;
-	shiftHeld = false;
-	updateNavIcons();
-});
-
-// ── Event handlers ──
-
-document.getElementById("btn-play-pause").addEventListener("click", () => {
-	ensureAudioContext(); // Unlock AudioContext synchronously during user gesture
-	vscode.postMessage({ type: "play_pause" });
-});
-
-document.getElementById("btn-next").addEventListener("click", () => {
-	if (shiftHeld || totalHighlights <= 1) {
-		vscode.postMessage({ type: "next" });
-	} else {
-		vscode.postMessage({ type: "next_highlight" });
-	}
-});
-
-document.getElementById("btn-prev").addEventListener("click", () => {
-	if (shiftHeld || totalHighlights <= 1) {
-		vscode.postMessage({ type: "prev" });
-	} else {
-		vscode.postMessage({ type: "prev_highlight" });
-	}
-});
-
-document.getElementById("btn-restart").addEventListener("click", () => {
-	vscode.postMessage({ type: "restart" });
-});
-
-document.getElementById("btn-save").addEventListener("click", () => {
-	vscode.postMessage({ type: "save" });
-});
-
-document.getElementById("btn-close").addEventListener("click", () => {
-	vscode.postMessage({ type: "close_walkthrough" });
-});
-
-document.getElementById("volume-slider").addEventListener("input", (e) => {
-	volume = parseInt(e.target.value, 10) / 100;
-	updateVolume();
-	vscode.postMessage({ type: "volume_change", volume });
-});
-
-document.getElementById("btn-mute").addEventListener("click", () => {
-	muted = !muted;
-	document.getElementById("btn-mute").textContent = muted ? "\uD83D\uDD07" : "\uD83D\uDD0A";
-	updateVolume();
-	vscode.postMessage({ type: "mute_toggle" });
-});
-
-document.getElementById("voice-select").addEventListener("change", (e) => {
-	vscode.postMessage({ type: "voice_change", voice: e.target.value });
-});
-
-// Speed buttons
-document.querySelectorAll("#speed-buttons button").forEach((btn) => {
-	btn.addEventListener("click", () => {
-		const speed = parseFloat(btn.dataset.speed);
-		document.querySelectorAll("#speed-buttons button").forEach((b) =>
-			b.classList.remove("active"),
-		);
-		btn.classList.add("active");
-		vscode.postMessage({ type: "speed_change", speed });
-	});
-});
-
-// ── Message handler from extension ──
-
-window.addEventListener("message", (event) => {
-	const msg = event.data;
-
-	switch (msg.type) {
-		case "server_loading": {
-			const btn = document.getElementById("btn-play-pause");
-			if (msg.loading) {
-				btn.classList.add("loading");
-				btn.setAttribute("aria-busy", "true");
-				btn.setAttribute("aria-disabled", "true");
-			} else {
-				btn.classList.remove("loading");
-				btn.removeAttribute("aria-busy");
-				btn.removeAttribute("aria-disabled");
-			}
-			break;
-		}
-
-		case "highlight_advance": {
-			currentHighlightIndex = msg.highlightIndex;
-			totalHighlights = msg.totalHighlights;
-			renderHighlightProgress();
-			const hlIdx = state.segments.findIndex((s) => s.id === state.currentSegment);
-			if (hlIdx !== -1) renderOutline(hlIdx);
-			// Update explanation if highlight has its own
-			if (msg.explanation) {
-				const explEl = document.getElementById("explanation-text");
-				explEl.classList.add("fade-out");
-				setTimeout(() => {
-					explEl.innerHTML = simpleMarkdown(msg.explanation);
-					explEl.classList.remove("fade-out");
-				}, 150);
-			} else {
-				// Revert to segment-level explanation
-				const seg = state.segments.find((s) => s.id === state.currentSegment);
-				if (seg && seg.explanation) {
-					const explEl = document.getElementById("explanation-text");
-					explEl.classList.add("fade-out");
-					setTimeout(() => {
-						explEl.innerHTML = simpleMarkdown(seg.explanation);
-						explEl.classList.remove("fade-out");
-					}, 150);
-				}
-			}
-			break;
-		}
-
-		case "update": {
-			const prevSegment = state.currentSegment;
-			state = {
-				title: msg.title,
-				segments: msg.segments,
-				currentSegment: msg.currentSegment,
-				status: msg.status,
-			};
-			// Only reset highlight state when the segment actually changed
-			if (prevSegment !== msg.currentSegment) {
-				currentHighlightIndex = 0;
-				totalHighlights = 0;
-			}
-			// If something else resumed playback while spacebar was held, clear the flag
-			if (state.status !== "paused") {
-				holdPaused = false;
-			}
+	window.addEventListener("message", (event) => {
+		const msg = event.data;
+		if (msg && msg.type === "update") {
+			state = msg;
 			render();
-			renderHighlightProgress();
-			break;
 		}
+	});
 
-		case "audio_chunk": {
-			const playBtn = document.getElementById("btn-play-pause");
-			playBtn.classList.remove("loading");
-			playBtn.removeAttribute("aria-busy");
-			playBtn.removeAttribute("aria-disabled");
-			playAudioChunk(msg.data, msg.sampleRate);
-			break;
-		}
-
-		case "audio_end":
-			onAudioEnd();
-			break;
-
-		case "audio_stop":
-			stopAudio();
-			break;
-
-		case "audio_suspend":
-			suspendAudio();
-			break;
-
-		case "audio_resume":
-			resumeAudio();
-			break;
-
-		case "saved_list": {
-			const section = document.getElementById("saved-list-section");
-			const list = document.getElementById("saved-list");
-			if (msg.walkthroughs.length === 0) {
-				section.style.display = "none";
-				break;
-			}
-			section.style.display = "";
-			list.innerHTML = "";
-			for (const wt of msg.walkthroughs) {
-				const li = document.createElement("li");
-				li.className = "saved-item";
-				li.textContent = wt.title;
-				li.addEventListener("click", () => {
-					vscode.postMessage({ type: "load", name: wt.name });
-				});
-				list.appendChild(li);
-			}
-			break;
-		}
-	}
-});
-
-// Initial render
-render();
+	render();
+})();

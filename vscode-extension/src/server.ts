@@ -4,38 +4,54 @@ import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
 import { WebSocketServer, WebSocket } from "ws";
-import type { Walkthrough } from "./walkthrough";
+import type { Review } from "./review";
 import type { AgentMessage, ExtensionMessage, UserActionMessage } from "./types";
-import type { WalkthroughStorage } from "./storage";
 
-const PORT_FILE = path.join(os.homedir(), ".claude-explainer-port");
-const TOKEN_FILE = path.join(os.homedir(), ".claude-explainer-token");
-const MAX_BODY_SIZE = 1024 * 1024; // 1MB
-const MAX_LONG_POLL_TIMEOUT = 120_000; // 2 minutes
+export const PORT_FILE = path.join(os.homedir(), ".claude-reviewer-port");
+export const TOKEN_FILE = path.join(os.homedir(), ".claude-reviewer-token");
+/** Per-workspace endpoint files: one VS Code window per workspace, so the agent can target the right one. */
+export const ENDPOINTS_DIR = path.join(os.homedir(), ".claude-reviewer", "endpoints");
 
-const VALID_AGENT_MESSAGE_TYPES = new Set([
-	"set_plan",
-	"insert_after",
-	"replace_segment",
-	"remove_segments",
-	"goto",
-	"resume",
-	"stop",
-]);
+export function endpointFileFor(workspaceRoot: string): string {
+	const key = crypto.createHash("sha1").update(workspaceRoot).digest("hex");
+	return path.join(ENDPOINTS_DIR, `${key}.json`);
+}
+const MAX_BODY_SIZE = 4 * 1024 * 1024; // 4MB — a review of a large diff can be sizeable
+const MAX_LONG_POLL_TIMEOUT = 120_000;
 
-export class ExplainerServer {
+const SEVERITIES = new Set(["info", "attention", "risk"]);
+
+function isHunk(h: unknown): boolean {
+	if (!h || typeof h !== "object") return false;
+	const x = h as Record<string, unknown>;
+	return (
+		typeof x.id === "number" &&
+		typeof x.file === "string" &&
+		typeof x.start === "number" &&
+		typeof x.end === "number" &&
+		typeof x.title === "string" &&
+		typeof x.severity === "string" && SEVERITIES.has(x.severity) &&
+		typeof x.what === "string" &&
+		typeof x.why === "string" &&
+		(x.check === undefined || typeof x.check === "string")
+	);
+}
+
+export class ReviewServer {
 	private httpServer: http.Server;
 	private wss: WebSocketServer;
-	private walkthrough: Walkthrough;
+	private review: Review;
 	private wsClients: Set<WebSocket> = new Set();
 	private pendingActions: UserActionMessage[] = [];
 	private actionWaiters: Array<(action: UserActionMessage) => void> = [];
 	private port = 0;
 	private authToken: string;
-	private storage: WalkthroughStorage | undefined;
+	private onAgentMessage?: (msg: AgentMessage) => void;
+	private workspaceRoot: string;
 
-	constructor(walkthrough: Walkthrough) {
-		this.walkthrough = walkthrough;
+	constructor(review: Review, workspaceRoot: string) {
+		this.review = review;
+		this.workspaceRoot = workspaceRoot;
 		this.authToken = crypto.randomBytes(32).toString("hex");
 		this.httpServer = http.createServer(this.handleHttp.bind(this));
 		this.wss = new WebSocketServer({
@@ -45,8 +61,8 @@ export class ExplainerServer {
 		this.wss.on("connection", this.handleWs.bind(this));
 	}
 
-	setStorage(storage: WalkthroughStorage): void {
-		this.storage = storage;
+	setMessageHandler(handler: (msg: AgentMessage) => void): void {
+		this.onAgentMessage = handler;
 	}
 
 	async start(): Promise<number> {
@@ -54,8 +70,22 @@ export class ExplainerServer {
 			this.httpServer.listen(0, "127.0.0.1", () => {
 				const addr = this.httpServer.address();
 				this.port = typeof addr === "object" && addr ? addr.port : 0;
+				// Global files: last window to activate wins. Kept as a fallback for single-window use.
 				fs.writeFileSync(PORT_FILE, String(this.port), "utf-8");
 				fs.writeFileSync(TOKEN_FILE, this.authToken, { encoding: "utf-8", mode: 0o600 });
+				// Per-workspace file: lets review.sh pick the window whose workspace matches the repo.
+				if (this.workspaceRoot) {
+					try {
+						fs.mkdirSync(ENDPOINTS_DIR, { recursive: true, mode: 0o700 });
+						fs.writeFileSync(
+							endpointFileFor(this.workspaceRoot),
+							JSON.stringify({ port: this.port, token: this.authToken, root: this.workspaceRoot, pid: process.pid }),
+							{ encoding: "utf-8", mode: 0o600 },
+						);
+					} catch (err) {
+						console.error("[code-reviewer] Could not write endpoint file:", err);
+					}
+				}
 				resolve(this.port);
 			});
 		});
@@ -65,45 +95,42 @@ export class ExplainerServer {
 		for (const ws of this.wsClients) ws.close();
 		this.wss.close();
 		this.httpServer.close();
-		try {
-			fs.unlinkSync(PORT_FILE);
-		} catch {}
-		try {
-			fs.unlinkSync(TOKEN_FILE);
-		} catch {}
+		// Only remove the global files if they still point at this instance.
+		try { if (fs.readFileSync(PORT_FILE, "utf-8").trim() === String(this.port)) fs.unlinkSync(PORT_FILE); } catch {}
+		try { if (fs.readFileSync(TOKEN_FILE, "utf-8").trim() === this.authToken) fs.unlinkSync(TOKEN_FILE); } catch {}
+		if (this.workspaceRoot) {
+			try { fs.unlinkSync(endpointFileFor(this.workspaceRoot)); } catch {}
+		}
 	}
 
-	/** Queue a user action for the agent to pick up via long-poll or WS */
+	/** Queue a user action for the agent (delivered via long-poll or WS). */
 	queueAction(action: UserActionMessage): void {
-		// If someone is waiting, deliver immediately
 		const waiter = this.actionWaiters.shift();
-		if (waiter) {
-			waiter(action);
-		} else {
-			this.pendingActions.push(action);
-		}
-		// Also broadcast to WS clients
+		if (waiter) waiter(action);
+		else this.pendingActions.push(action);
 		this.broadcastToClients(action);
 	}
 
-	/** Send state to all connected WS clients */
-	broadcastState(): void {
-		const state = this.walkthrough.getState();
-		const msg: ExtensionMessage = {
+	stateMessage(): ExtensionMessage {
+		const state = this.review.getState();
+		return {
 			type: "state",
-			currentSegment: state.segments[state.currentIndex]?.id ?? -1,
 			status: state.status,
-			totalSegments: state.segments.length,
+			currentHunk: state.hunks[state.currentIndex]?.id ?? -1,
+			totalHunks: state.hunks.length,
+			reviewedCount: this.review.reviewedCount(),
+			flaggedHunks: this.review.flaggedIds(),
 		};
-		this.broadcastToClients(msg);
 	}
 
-	private broadcastToClients(msg: ExtensionMessage | UserActionMessage): void {
+	broadcastState(): void {
+		this.broadcastToClients(this.stateMessage());
+	}
+
+	private broadcastToClients(msg: ExtensionMessage): void {
 		const json = JSON.stringify(msg);
 		for (const ws of this.wsClients) {
-			if (ws.readyState === WebSocket.OPEN) {
-				ws.send(json);
-			}
+			if (ws.readyState === WebSocket.OPEN) ws.send(json);
 		}
 	}
 
@@ -112,12 +139,10 @@ export class ExplainerServer {
 	private checkAuth(req: http.IncomingMessage): boolean {
 		const auth = req.headers["authorization"];
 		if (auth === `Bearer ${this.authToken}`) return true;
-		const token = req.headers["x-auth-token"];
-		if (token === this.authToken) return true;
-		return false;
+		return req.headers["x-auth-token"] === this.authToken;
 	}
 
-	// ── HTTP handler ──
+	// ── HTTP ──
 
 	private handleHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
 		res.setHeader("Content-Type", "application/json");
@@ -127,7 +152,6 @@ export class ExplainerServer {
 			res.end();
 			return;
 		}
-
 		if (!this.checkAuth(req)) {
 			res.writeHead(401);
 			res.end(JSON.stringify({ error: "Unauthorized" }));
@@ -138,7 +162,7 @@ export class ExplainerServer {
 
 		if (req.method === "GET" && url.pathname === "/api/health") {
 			res.writeHead(200);
-			res.end(JSON.stringify({ status: "ok" }));
+			res.end(JSON.stringify({ status: "ok", workspaceRoot: this.workspaceRoot }));
 		} else if (req.method === "GET" && url.pathname === "/api/state") {
 			this.handleGetState(res);
 		} else if (req.method === "GET" && url.pathname === "/api/actions") {
@@ -147,33 +171,24 @@ export class ExplainerServer {
 			this.handleGetActions(res, timeout);
 		} else if (req.method === "POST" && url.pathname === "/api/message") {
 			this.readBody(req, res, (body) => {
+				let msg: unknown;
 				try {
-					const msg = JSON.parse(body);
-					if (!this.validateAgentMessage(msg)) {
-						res.writeHead(400);
-						res.end(JSON.stringify({ error: "Invalid message format" }));
-						return;
-					}
-					this.handleAgentMessage(msg as AgentMessage);
-					res.writeHead(200);
-					res.end(JSON.stringify({ ok: true }));
+					msg = JSON.parse(body);
 				} catch {
 					res.writeHead(400);
 					res.end(JSON.stringify({ error: "Invalid JSON" }));
+					return;
 				}
+				const problem = this.validateAgentMessage(msg);
+				if (problem) {
+					res.writeHead(400);
+					res.end(JSON.stringify({ error: problem }));
+					return;
+				}
+				this.onAgentMessage?.(msg as AgentMessage);
+				res.writeHead(200);
+				res.end(JSON.stringify({ ok: true }));
 			});
-		} else if (req.method === "POST" && url.pathname === "/api/save") {
-			this.readBody(req, res, (body) => this.handleSave(res, body).catch(() => {
-				if (!res.writableEnded) { res.writeHead(500); res.end(JSON.stringify({ error: "Internal error" })); }
-			}));
-		} else if (req.method === "GET" && url.pathname === "/api/walkthroughs") {
-			this.handleListWalkthroughs(res).catch(() => {
-				if (!res.writableEnded) { res.writeHead(500); res.end(JSON.stringify({ error: "Internal error" })); }
-			});
-		} else if (req.method === "POST" && url.pathname === "/api/load") {
-			this.readBody(req, res, (body) => this.handleLoad(res, body).catch(() => {
-				if (!res.writableEnded) { res.writeHead(500); res.end(JSON.stringify({ error: "Internal error" })); }
-			}));
 		} else {
 			res.writeHead(404);
 			res.end(JSON.stringify({ error: "Not found" }));
@@ -181,23 +196,23 @@ export class ExplainerServer {
 	}
 
 	private handleGetState(res: http.ServerResponse): void {
-		const state = this.walkthrough.getState();
-		const currentSeg = state.segments[state.currentIndex];
+		const state = this.review.getState();
+		const current = state.hunks[state.currentIndex] ?? null;
 		res.writeHead(200);
 		res.end(
 			JSON.stringify({
+				...this.stateMessage(),
 				title: state.title,
-				currentSegment: currentSeg?.id ?? -1,
-				status: state.status,
-				totalSegments: state.segments.length,
 				currentIndex: state.currentIndex,
-				segment: currentSeg ?? null,
+				hunk: current,
+				hunks: state.hunks.map(({ id, file, start, end, title, severity, reviewed, flagged, resolved }) => ({
+					id, file, start, end, title, severity, reviewed, flagged, resolved,
+				})),
 			}),
 		);
 	}
 
 	private handleGetActions(res: http.ServerResponse, timeout: number): void {
-		// Return pending action immediately if available
 		const action = this.pendingActions.shift();
 		if (action) {
 			res.writeHead(200);
@@ -205,7 +220,6 @@ export class ExplainerServer {
 			return;
 		}
 
-		// Long-poll: wait for next action
 		const timer = setTimeout(() => {
 			const idx = this.actionWaiters.indexOf(waiter);
 			if (idx !== -1) this.actionWaiters.splice(idx, 1);
@@ -213,12 +227,11 @@ export class ExplainerServer {
 			res.end();
 		}, timeout);
 
-		const waiter = (action: UserActionMessage) => {
+		const waiter = (a: UserActionMessage) => {
 			clearTimeout(timer);
 			res.writeHead(200);
-			res.end(JSON.stringify(action));
+			res.end(JSON.stringify(a));
 		};
-
 		this.actionWaiters.push(waiter);
 
 		res.on("close", () => {
@@ -228,156 +241,64 @@ export class ExplainerServer {
 		});
 	}
 
-	// ── Save / Load / List handlers ──
-
-	private async handleSave(res: http.ServerResponse, body: string): Promise<void> {
-		if (!this.storage) {
-			res.writeHead(500);
-			res.end(JSON.stringify({ error: "Storage not available" }));
-			return;
-		}
-
-		const state = this.walkthrough.getState();
-		if (!state.title || state.segments.length === 0) {
-			res.writeHead(400);
-			res.end(JSON.stringify({ error: "No active walkthrough" }));
-			return;
-		}
-
-		let name: string | undefined;
-		try {
-			if (body.trim()) {
-				name = JSON.parse(body).name;
-			}
-		} catch {
-			res.writeHead(400);
-			res.end(JSON.stringify({ error: "Invalid JSON" }));
-			return;
-		}
-
-		try {
-			const filePath = await this.storage.save(state.title, state.segments, name);
-			res.writeHead(200);
-			res.end(JSON.stringify({ ok: true, filePath }));
-		} catch {
-			res.writeHead(500);
-			res.end(JSON.stringify({ error: "Failed to save walkthrough" }));
-		}
-	}
-
-	private async handleListWalkthroughs(res: http.ServerResponse): Promise<void> {
-		if (!this.storage) {
-			res.writeHead(200);
-			res.end(JSON.stringify({ walkthroughs: [] }));
-			return;
-		}
-
-		try {
-			const walkthroughs = await this.storage.list();
-			res.writeHead(200);
-			res.end(JSON.stringify({ walkthroughs }));
-		} catch {
-			res.writeHead(200);
-			res.end(JSON.stringify({ walkthroughs: [] }));
-		}
-	}
-
-	private async handleLoad(res: http.ServerResponse, body: string): Promise<void> {
-		if (!this.storage) {
-			res.writeHead(500);
-			res.end(JSON.stringify({ error: "Storage not available" }));
-			return;
-		}
-
-		let name: string;
-		try {
-			name = JSON.parse(body).name;
-		} catch {
-			res.writeHead(400);
-			res.end(JSON.stringify({ error: "Invalid JSON" }));
-			return;
-		}
-
-		if (!name || typeof name !== "string") {
-			res.writeHead(400);
-			res.end(JSON.stringify({ error: "Missing 'name' field" }));
-			return;
-		}
-
-		const data = await this.storage.load(name);
-		if (!data) {
-			res.writeHead(404);
-			res.end(JSON.stringify({ error: "Walkthrough not found" }));
-			return;
-		}
-
-		this.walkthrough.setPlan(data.title, data.segments);
-		res.writeHead(200);
-		res.end(JSON.stringify({ ok: true, title: data.title, segments: data.segments.length }));
-	}
-
-	// ── WebSocket handler ──
+	// ── WebSocket ──
 
 	private handleWs(ws: WebSocket): void {
 		this.wsClients.add(ws);
-
 		ws.on("message", (data) => {
 			try {
 				const msg = JSON.parse(data.toString());
-				if (!this.validateAgentMessage(msg)) {
-					console.error("[code-explainer] Invalid WS message format");
+				const problem = this.validateAgentMessage(msg);
+				if (problem) {
+					ws.send(JSON.stringify({ type: "error", error: problem }));
 					return;
 				}
-				this.handleAgentMessage(msg as AgentMessage);
+				this.onAgentMessage?.(msg as AgentMessage);
 			} catch (err) {
-				console.error("[code-explainer] Invalid WS message:", err);
+				console.error("[code-reviewer] Invalid WS message:", err);
 			}
 		});
-
-		ws.on("close", () => {
-			this.wsClients.delete(ws);
-		});
-
-		// Send current state on connect
-		this.broadcastState();
+		ws.on("close", () => this.wsClients.delete(ws));
+		ws.send(JSON.stringify(this.stateMessage()));
 	}
 
-	// ── Validation ──
+	// ── Validation (returns a problem description, or null when valid) ──
 
-	private validateAgentMessage(msg: unknown): boolean {
-		if (!msg || typeof msg !== "object") return false;
+	private validateAgentMessage(msg: unknown): string | null {
+		if (!msg || typeof msg !== "object") return "Message must be an object";
 		const m = msg as Record<string, unknown>;
-		if (typeof m.type !== "string" || !VALID_AGENT_MESSAGE_TYPES.has(m.type)) return false;
-
 		switch (m.type) {
-			case "set_plan":
-				return typeof m.title === "string" && Array.isArray(m.segments);
-			case "insert_after":
-				return typeof m.afterSegment === "number" && Array.isArray(m.segments);
-			case "replace_segment":
-				return typeof m.id === "number" && typeof m.segment === "object" && m.segment !== null;
-			case "remove_segments":
-				return Array.isArray(m.ids);
+			case "set_review": {
+				if (typeof m.title !== "string") return "set_review: 'title' must be a string";
+				if (typeof m.summary !== "string") return "set_review: 'summary' must be a string";
+				if (!Array.isArray(m.hunks)) return "set_review: 'hunks' must be an array";
+				const bad = (m.hunks as unknown[]).findIndex((h) => !isHunk(h));
+				if (bad !== -1) return `set_review: hunks[${bad}] is missing a required field (id, file, start, end, title, severity, what, why) or has an invalid severity`;
+				const ids = new Set((m.hunks as Array<{ id: number }>).map((h) => h.id));
+				if (ids.size !== (m.hunks as unknown[]).length) return "set_review: hunk ids must be unique";
+				return null;
+			}
 			case "goto":
-				return typeof m.segmentId === "number";
-			case "resume":
-			case "stop":
-				return true;
+				return typeof m.hunkId === "number" ? null : "goto: 'hunkId' must be a number";
+			case "update_hunk":
+				if (typeof m.id !== "number") return "update_hunk: 'id' must be a number";
+				if (!m.hunk || typeof m.hunk !== "object") return "update_hunk: 'hunk' must be an object";
+				return null;
+			case "remove_hunks":
+				return Array.isArray(m.ids) ? null : "remove_hunks: 'ids' must be an array";
+			case "reply":
+				if (typeof m.hunkId !== "number") return "reply: 'hunkId' must be a number";
+				if (typeof m.text !== "string" || !m.text.trim()) return "reply: 'text' must be a non-empty string";
+				return null;
+			case "resolve":
+				if (typeof m.hunkId !== "number") return "resolve: 'hunkId' must be a number";
+				if (m.text !== undefined && typeof m.text !== "string") return "resolve: 'text' must be a string";
+				return null;
+			case "close":
+				return null;
 			default:
-				return false;
+				return `Unknown message type '${String(m.type)}'`;
 		}
-	}
-
-	// ── Message dispatch ──
-
-	private onAgentMessage?: (msg: AgentMessage) => void;
-
-	setMessageHandler(handler: (msg: AgentMessage) => void): void {
-		this.onAgentMessage = handler;
-	}
-
-	private handleAgentMessage(msg: AgentMessage): void {
-		this.onAgentMessage?.(msg);
 	}
 
 	// ── Helpers ──

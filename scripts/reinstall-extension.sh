@@ -10,11 +10,15 @@ echo "Building extension..."
 npm run compile -- --minify
 
 echo "Packaging extension..."
-npx @vscode/vsce package --no-dependencies
+npx @vscode/vsce package --no-dependencies --allow-star-activation --allow-missing-repository
 
 VSIX=$(ls -t *.vsix | head -1)
 
-echo "Installing $VSIX..."
-code --install-extension "$VSIX" --force
+for EDITOR_CLI in code cursor; do
+    if command -v "$EDITOR_CLI" &>/dev/null; then
+        echo "Installing $VSIX in $EDITOR_CLI..."
+        "$EDITOR_CLI" --install-extension "$VSIX" --force
+    fi
+done
 
-echo "Done. Reload VS Code to pick up changes."
+echo "Done. Reload your editor to pick up changes."

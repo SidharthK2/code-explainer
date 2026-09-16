@@ -1,151 +1,133 @@
-// ── Walkthrough data ──
+// ── Review data ──
 
-export interface Highlight {
-	start: number;   // 1-based line number
-	end: number;     // 1-based line number
-	ttsText: string; // narration for these specific lines
-	explanation?: string; // optional per-highlight explanation
-}
+export type Severity = "info" | "attention" | "risk";
 
-export interface Segment {
+/** How the hunk relates to HEAD. "deleted" hunks anchor to the line below the removed code. */
+export type HunkKind = "added" | "modified" | "deleted";
+
+export interface Hunk {
 	id: number;
+	/** Absolute path in the working tree (relative paths are resolved against the workspace root). */
 	file: string;
+	/** 1-based line numbers on the working-tree (modified) side of the diff. */
 	start: number;
 	end: number;
+	kind?: HunkKind;
 	title: string;
-	explanation: string;
-	highlights: Highlight[];
+	severity: Severity;
+	/** What the change does. Markdown, factual. */
+	what: string;
+	/** Why it was likely done. Markdown. */
+	why: string;
+	/** What a human should verify. Markdown. Empty for pure info notes. */
+	check: string;
 }
+
+export interface HunkState {
+	reviewed: boolean;
+	flagged: boolean;
+	resolved: boolean;
+}
+
+export type ReviewStatus = "idle" | "active" | "closed";
 
 // ── Agent → Extension messages (HTTP + WS) ──
 
-export interface SetPlanMessage {
-	type: "set_plan";
+export interface SetReviewMessage {
+	type: "set_review";
 	title: string;
-	segments: Segment[];
-}
-
-export interface InsertAfterMessage {
-	type: "insert_after";
-	afterSegment: number;
-	segments: Segment[];
-}
-
-export interface ReplaceSegmentMessage {
-	type: "replace_segment";
-	id: number;
-	segment: Segment;
-}
-
-export interface RemoveSegmentsMessage {
-	type: "remove_segments";
-	ids: number[];
+	/** Markdown summary of the whole change set. */
+	summary: string;
+	hunks: Hunk[];
 }
 
 export interface GotoMessage {
 	type: "goto";
-	segmentId: number;
+	hunkId: number;
 }
 
-export interface ResumeMessage {
-	type: "resume";
+export interface UpdateHunkMessage {
+	type: "update_hunk";
+	id: number;
+	hunk: Partial<Omit<Hunk, "id">>;
 }
 
-export interface StopMessage {
-	type: "stop";
+export interface RemoveHunksMessage {
+	type: "remove_hunks";
+	ids: number[];
+}
+
+/** Agent posts a comment into a hunk's thread (answers to questions land here, not in the terminal). */
+export interface ReplyMessage {
+	type: "reply";
+	hunkId: number;
+	text: string;
+}
+
+/** Agent marks a flagged hunk as fixed; optional text is posted as the closing comment. */
+export interface ResolveMessage {
+	type: "resolve";
+	hunkId: number;
+	text?: string;
+}
+
+export interface CloseMessage {
+	type: "close";
 }
 
 export type AgentMessage =
-	| SetPlanMessage
-	| InsertAfterMessage
-	| ReplaceSegmentMessage
-	| RemoveSegmentsMessage
+	| SetReviewMessage
 	| GotoMessage
-	| ResumeMessage
-	| StopMessage;
+	| UpdateHunkMessage
+	| RemoveHunksMessage
+	| ReplyMessage
+	| ResolveMessage
+	| CloseMessage;
 
 // ── Extension → Agent messages ──
 
-export type WalkthroughStatus = "playing" | "paused" | "stopped" | "idle";
-
 export interface StateMessage {
 	type: "state";
-	currentSegment: number;
-	status: WalkthroughStatus;
-	totalSegments: number;
+	status: ReviewStatus;
+	currentHunk: number;
+	totalHunks: number;
+	reviewedCount: number;
+	flaggedHunks: number[];
 }
+
+export type UserActionKind = "ask_question" | "flag" | "finish";
 
 export interface UserActionMessage {
 	type: "user_action";
-	action: "ask_question";
-	segmentId: number;
-	question?: string;
+	action: UserActionKind;
+	hunkId?: number;
+	text?: string;
+	file?: string;
+	start?: number;
+	end?: number;
 }
 
 export type ExtensionMessage = StateMessage | UserActionMessage;
 
 // ── Extension ↔ Webview messages ──
 
+export type HunkView = Hunk & HunkState;
+
 export interface WebviewUpdateMessage {
 	type: "update";
 	title: string;
-	segments: Segment[];
-	currentSegment: number;
-	status: WalkthroughStatus;
+	summary: string;
+	hunks: HunkView[];
+	currentHunk: number;
+	status: ReviewStatus;
+	workspaceRoot: string;
 }
 
-export interface WebviewAudioChunkMessage {
-	type: "audio_chunk";
-	data: string; // base64-encoded float32 PCM
-	sampleRate: number;
-}
+export type ToWebviewMessage = WebviewUpdateMessage;
 
-export interface WebviewAudioEndMessage {
-	type: "audio_end";
-}
-
-export interface WebviewAudioStopMessage {
-	type: "audio_stop";
-}
-
-export interface WebviewAudioSuspendMessage {
-	type: "audio_suspend";
-}
-
-export interface WebviewAudioResumeMessage {
-	type: "audio_resume";
-}
-
-export interface WebviewHighlightAdvanceMessage {
-	type: "highlight_advance";
-	highlightIndex: number;
-	totalHighlights: number;
-	explanation?: string;
-}
-
-export interface WebviewServerLoadingMessage {
-	type: "server_loading";
-	loading: boolean;
-}
-
-export interface WebviewSavedListMessage {
-	type: "saved_list";
-	walkthroughs: Array<{ name: string; title: string }>;
-}
-
-export type ToWebviewMessage =
-	| WebviewUpdateMessage
-	| WebviewAudioChunkMessage
-	| WebviewAudioEndMessage
-	| WebviewAudioStopMessage
-	| WebviewAudioSuspendMessage
-	| WebviewAudioResumeMessage
-	| WebviewHighlightAdvanceMessage
-	| WebviewServerLoadingMessage
-	| WebviewSavedListMessage;
-
-export interface WebviewPlayPauseMessage {
-	type: "play_pause";
+export interface WebviewGotoHunkMessage {
+	type: "goto_hunk";
+	hunkId: number;
 }
 
 export interface WebviewNextMessage {
@@ -156,82 +138,23 @@ export interface WebviewPrevMessage {
 	type: "prev";
 }
 
-export interface WebviewGotoSegmentMessage {
-	type: "goto_segment";
-	segmentId: number;
+export interface WebviewToggleReviewedMessage {
+	type: "toggle_reviewed";
+	hunkId: number;
 }
 
-export interface WebviewSpeedChangeMessage {
-	type: "speed_change";
-	speed: number;
+export interface WebviewFinishMessage {
+	type: "finish";
 }
 
-export interface WebviewVolumeChangeMessage {
-	type: "volume_change";
-	volume: number;
-}
-
-export interface WebviewVoiceChangeMessage {
-	type: "voice_change";
-	voice: string;
-}
-
-export interface WebviewMuteToggleMessage {
-	type: "mute_toggle";
-}
-
-export interface WebviewRestartMessage {
-	type: "restart";
-}
-
-export interface WebviewNextHighlightMessage {
-	type: "next_highlight";
-}
-
-export interface WebviewPrevHighlightMessage {
-	type: "prev_highlight";
-}
-
-export interface WebviewPlaybackCompleteMessage {
-	type: "playback_complete";
-}
-
-export interface WebviewChunkPlayedMessage {
-	type: "chunk_played";
-}
-
-export interface WebviewSaveMessage {
-	type: "save";
-}
-
-export interface WebviewLoadMessage {
-	type: "load";
-	name: string;
-}
-
-export interface WebviewRequestSavedListMessage {
-	type: "request_saved_list";
-}
-
-export interface WebviewCloseWalkthroughMessage {
-	type: "close_walkthrough";
+export interface WebviewCloseMessage {
+	type: "close";
 }
 
 export type FromWebviewMessage =
-	| WebviewPlayPauseMessage
+	| WebviewGotoHunkMessage
 	| WebviewNextMessage
 	| WebviewPrevMessage
-	| WebviewGotoSegmentMessage
-	| WebviewSpeedChangeMessage
-	| WebviewVolumeChangeMessage
-	| WebviewVoiceChangeMessage
-	| WebviewMuteToggleMessage
-	| WebviewRestartMessage
-	| WebviewPlaybackCompleteMessage
-	| WebviewChunkPlayedMessage
-	| WebviewNextHighlightMessage
-	| WebviewPrevHighlightMessage
-	| WebviewSaveMessage
-	| WebviewLoadMessage
-	| WebviewRequestSavedListMessage
-	| WebviewCloseWalkthroughMessage;
+	| WebviewToggleReviewedMessage
+	| WebviewFinishMessage
+	| WebviewCloseMessage;

@@ -1,9 +1,9 @@
 {
-	"name": "code-explainer",
-	"displayName": "Code Explainer",
-	"description": "Interactive code walkthroughs with AI-powered voice narration and editor highlighting.",
-	"version": "0.2.0",
-	"publisher": "srujangurram",
+	"name": "code-reviewer",
+	"displayName": "Code Review",
+	"description": "Review agent-written changes as a side-by-side diff with per-hunk reviewer notes, questions, and fix requests.",
+	"version": "0.3.0",
+	"publisher": "sidharthk2",
 	"icon": "media/icon.png",
 	"engines": {
 		"vscode": "^1.85.0"
@@ -11,50 +11,65 @@
 	"categories": ["Other"],
 	"activationEvents": ["*"],
 	"main": "./out/extension.js",
+	"capabilities": {
+		"untrustedWorkspaces": {
+			"supported": true,
+			"description": "Runs `git show HEAD:<file>` in the workspace and opens diff editors. Reviews are sent by your local coding agent over localhost."
+		},
+		"virtualWorkspaces": false
+	},
 	"contributes": {
 		"commands": [
-			{ "command": "codeExplainer.togglePlayPause", "title": "Code Explainer: Toggle Play/Pause" },
-			{ "command": "codeExplainer.next", "title": "Code Explainer: Next Sub-segment" },
-			{ "command": "codeExplainer.prev", "title": "Code Explainer: Previous Sub-segment" },
-			{ "command": "codeExplainer.nextSegment", "title": "Code Explainer: Next Segment" },
-			{ "command": "codeExplainer.prevSegment", "title": "Code Explainer: Previous Segment" },
-			{ "command": "codeExplainer.stop", "title": "Code Explainer: Stop Walkthrough" },
-			{ "command": "codeExplainer.speedUp", "title": "Code Explainer: Speed Up" },
-			{ "command": "codeExplainer.speedDown", "title": "Code Explainer: Speed Down" },
-			{ "command": "codeExplainer.saveWalkthrough", "title": "Code Explainer: Save Walkthrough" },
-			{ "command": "codeExplainer.loadWalkthrough", "title": "Code Explainer: Load Walkthrough" }
+			{ "command": "codeReviewer.next", "title": "Code Review: Next Hunk" },
+			{ "command": "codeReviewer.prev", "title": "Code Review: Previous Hunk" },
+			{ "command": "codeReviewer.finish", "title": "Code Review: Finish Review" },
+			{ "command": "codeReviewer.close", "title": "Code Review: Close Review" },
+			{ "command": "codeReviewer.askAgent", "title": "Ask agent", "enablement": "!commentIsEmpty" },
+			{ "command": "codeReviewer.flagHunk", "title": "Flag for fix", "enablement": "!commentIsEmpty" },
+			{ "command": "codeReviewer.markReviewed", "title": "Toggle reviewed", "icon": "$(check)" }
 		],
 		"keybindings": [
-			{ "command": "codeExplainer.togglePlayPause", "key": "ctrl+shift+space", "when": "codeExplainer.walkthroughActive" },
-			{ "command": "codeExplainer.next", "key": "ctrl+shift+]", "when": "codeExplainer.walkthroughActive" },
-			{ "command": "codeExplainer.prev", "key": "ctrl+shift+[", "when": "codeExplainer.walkthroughActive" },
-			{ "command": "codeExplainer.nextSegment", "key": "ctrl+shift+alt+]", "when": "codeExplainer.walkthroughActive" },
-			{ "command": "codeExplainer.prevSegment", "key": "ctrl+shift+alt+[", "when": "codeExplainer.walkthroughActive" },
-			{ "command": "codeExplainer.stop", "key": "ctrl+shift+\\", "when": "codeExplainer.walkthroughActive" },
-			{ "command": "codeExplainer.speedUp", "key": "ctrl+shift+=", "when": "codeExplainer.walkthroughActive" },
-			{ "command": "codeExplainer.speedDown", "key": "ctrl+shift+-", "when": "codeExplainer.walkthroughActive" }
+			{ "command": "codeReviewer.next", "key": "ctrl+shift+]", "when": "codeReviewer.reviewActive" },
+			{ "command": "codeReviewer.prev", "key": "ctrl+shift+[", "when": "codeReviewer.reviewActive" },
+			{ "command": "codeReviewer.finish", "key": "ctrl+shift+enter", "when": "codeReviewer.reviewActive && !commentEditorFocused" },
+			{ "command": "codeReviewer.close", "key": "ctrl+shift+\\", "when": "codeReviewer.reviewActive" }
 		],
+		"menus": {
+			"commandPalette": [
+				{ "command": "codeReviewer.askAgent", "when": "false" },
+				{ "command": "codeReviewer.flagHunk", "when": "false" },
+				{ "command": "codeReviewer.markReviewed", "when": "false" }
+			],
+			"comments/commentThread/context": [
+				{ "command": "codeReviewer.askAgent", "group": "inline@1", "when": "commentController == codeReviewer" },
+				{ "command": "codeReviewer.flagHunk", "group": "inline@2", "when": "commentController == codeReviewer" }
+			],
+			"comments/commentThread/title": [
+				{ "command": "codeReviewer.markReviewed", "group": "navigation", "when": "commentController == codeReviewer" }
+			]
+		},
 		"viewsContainers": {
 			"activitybar": [
 				{
-					"id": "code-explainer",
-					"title": "Code Explainer",
+					"id": "code-reviewer",
+					"title": "Code Review",
 					"icon": "media/icon.svg"
 				}
 			]
 		},
 		"views": {
-			"code-explainer": [
+			"code-reviewer": [
 				{
 					"type": "webview",
-					"id": "codeExplainer.sidebar",
-					"name": "Code Explainer"
+					"id": "codeReviewer.sidebar",
+					"name": "Code Review"
 				}
 			]
 		}
 	},
 	"scripts": {
 		"compile": "esbuild src/extension.ts --bundle --platform=node --target=node18 --outfile=out/extension.js --external:vscode --format=cjs --sourcemap",
+		"typecheck": "tsc --noEmit",
 		"watch": "npm run compile -- --watch",
 		"package": "npm run compile -- --minify && vsce package --no-dependencies"
 	},

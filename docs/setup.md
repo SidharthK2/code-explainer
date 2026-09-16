@@ -1,18 +1,17 @@
 # Setup (one-time)
 
-Run the setup script — it handles everything:
+Run the setup script:
 
 ```bash
-~/.claude/skills/explainer/setup.sh
+~/.claude/skills/review/setup.sh
 ```
 
-This will:
-1. Check prerequisites (macOS, Python 3.10+, Node.js, VS Code or Cursor)
-2. Ask your model preferences — shows the default `LARGE`/`MEDIUM`/`SMALL` models and lets you swap them for any model your agent supports (GPT-4o, Gemini, local models, etc.)
-3. Create a Python venv and install TTS engine (mlx-audio + sounddevice)
-4. Build and install the `code-explainer` extension (VS Code + Cursor)
-5. Pre-download the TTS voice model (~330 MB)
+It will:
+1. Check prerequisites (git, Node.js, VS Code or Cursor CLI; warns if `jq` or `python3` are missing)
+2. Ask which model the `REVIEWER` sub-agent should use (default in `SKILL.md`)
+3. Build the `code-reviewer` extension and install it into every detected editor
+4. Mark the helper scripts executable
 
-After setup, reload your editor: `Cmd+Shift+P` → "Developer: Reload Window".
+Then reload the editor: `Cmd+Shift+P` → "Developer: Reload Window". On activation the extension writes a per-workspace endpoint file under `~/.claude-reviewer/endpoints/` and the global fallbacks `~/.claude-reviewer-port` and `~/.claude-reviewer-token`; `scripts/review.sh health` run inside the repo confirms the right window is up.
 
-**Requirements:** macOS (Apple Silicon recommended), Python 3.10+, Node.js, VS Code or Cursor with CLI enabled.
+**Requirements:** git, Node.js 18+, VS Code or Cursor with the CLI command enabled. No Python environment and no model downloads.

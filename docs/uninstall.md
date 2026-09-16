@@ -1,136 +1,38 @@
-# Uninstalling Code Explainer
+# Uninstalling Code Review
 
-This guide walks you through completely removing Code Explainer from your system. Each step includes a verification check so you can confirm the removal was successful.
-
----
-
-## Step 1: Stop Running Processes
-
-Kill the TTS server if it's running.
+## 1. Uninstall the extension
 
 ```bash
-# Stop TTS server
-if [ -f /tmp/tts-server.pid ]; then
-    kill "$(cat /tmp/tts-server.pid)" 2>/dev/null
-    echo "TTS server stopped"
-else
-    echo "TTS server not running"
-fi
+code --uninstall-extension sidharthk2.code-reviewer 2>/dev/null && echo "Removed from VS Code" || echo "Not installed in VS Code"
+cursor --uninstall-extension sidharthk2.code-reviewer 2>/dev/null && echo "Removed from Cursor" || echo "Not installed in Cursor"
 ```
 
-**Verify:**
+Verify:
 
 ```bash
-# Should print "No TTS process found"
-if pgrep -f tts_server.py > /dev/null; then
-    echo "WARNING: TTS server still running"
-else
-    echo "No TTS process found"
-fi
+code --list-extensions 2>/dev/null | grep -i code-reviewer || echo "VS Code: clean"
+cursor --list-extensions 2>/dev/null | grep -i code-reviewer || echo "Cursor: clean"
 ```
 
----
+Reload the editor afterwards: **Cmd+Shift+P** → **Developer: Reload Window**.
 
-## Step 2: Uninstall the VS Code / Cursor Extension
+## 2. Remove the port and token files
+
+The extension deletes these on deactivation; remove them if it was force-quit.
 
 ```bash
-# VS Code
-code --uninstall-extension srujangurram.code-explainer 2>/dev/null && echo "Removed from VS Code" || echo "Not installed in VS Code"
-
-# Cursor
-cursor --uninstall-extension srujangurram.code-explainer 2>/dev/null && echo "Removed from Cursor" || echo "Not installed in Cursor"
+rm -rf ~/.claude-reviewer-port ~/.claude-reviewer-token ~/.claude-reviewer
 ```
 
-**Verify:**
+## 3. Remove the skill directory
+
+Pick the one matching your agent:
 
 ```bash
-# Should NOT list code-explainer
-code --list-extensions 2>/dev/null | grep -i code-explainer || echo "VS Code: clean"
-cursor --list-extensions 2>/dev/null | grep -i code-explainer || echo "Cursor: clean"
+rm -rf ~/.claude/skills/review            # Claude Code
+rm -rf ~/.codex/skills/review             # Codex CLI
+rm -rf ~/.config/opencode/skills/review   # OpenCode
+rm -rf ~/.config/agents/skills/review     # Amp
 ```
 
-After uninstalling, reload your editor: **Cmd+Shift+P** → **Developer: Reload Window**
-
----
-
-## Step 3: Remove the Skill Directory
-
-This removes the skill files, Python virtual environment, and TTS model cache.
-
-```bash
-rm -rf ~/.claude/skills/explainer
-```
-
-**Verify:**
-
-```bash
-[ -d ~/.claude/skills/explainer ] && echo "WARNING: directory still exists" || echo "Skill directory removed"
-```
-
----
-
-## Step 4: Clean Up Runtime Files
-
-Remove temporary files created during use.
-
-```bash
-rm -f ~/.claude-explainer-port
-rm -f ~/.claude-explainer-token
-rm -f /tmp/tts-server.sock
-rm -f /tmp/tts-server.pid
-rm -f /tmp/tts-server.log
-```
-
-**Verify:**
-
-```bash
-for f in ~/.claude-explainer-port ~/.claude-explainer-token /tmp/tts-server.sock /tmp/tts-server.pid /tmp/tts-server.log; do
-    [ -e "$f" ] && echo "WARNING: $f still exists" || echo "$f removed"
-done
-```
-
----
-
-## All-in-One Script
-
-To remove everything in one go, run this from your terminal:
-
-```bash
-#!/bin/bash
-set -e
-
-echo "Uninstalling Code Explainer..."
-
-# 1. Stop TTS server
-if [ -f /tmp/tts-server.pid ]; then
-    kill "$(cat /tmp/tts-server.pid)" 2>/dev/null || true
-    echo "  Stopped TTS server"
-fi
-
-# 2. Uninstall extension
-code --uninstall-extension srujangurram.code-explainer 2>/dev/null && echo "  Removed VS Code extension" || true
-cursor --uninstall-extension srujangurram.code-explainer 2>/dev/null && echo "  Removed Cursor extension" || true
-
-# 3. Remove skill directory
-rm -rf ~/.claude/skills/explainer
-echo "  Removed skill directory"
-
-# 4. Clean up runtime files
-rm -f ~/.claude-explainer-port ~/.claude-explainer-token
-rm -f /tmp/tts-server.sock /tmp/tts-server.pid /tmp/tts-server.log
-echo "  Cleaned up runtime files"
-
-echo ""
-echo "Done. Reload your editor: Cmd+Shift+P → 'Developer: Reload Window'"
-```
-
----
-
-## What Gets Removed
-
-| Component | Location | Size |
-|-----------|----------|------|
-| Skill files + venv + TTS model | `~/.claude/skills/explainer/` | ~500 MB |
-| VS Code extension | Editor extensions directory | ~1 MB |
-| Port/token files | `~/.claude-explainer-port`, `~/.claude-explainer-token` | <1 KB |
-| TTS runtime files | `/tmp/tts-server.*` | <1 KB |
+For rule-based agents (Cursor, Windsurf, Kilo, Roo, Cline) also delete the rule file you created from `SKILL.md`.
