@@ -12,6 +12,10 @@
   A coding-agent skill plus a VS Code / Cursor extension. After your agent edits code, <code>/review</code> opens each changed file in VS Code's side-by-side diff editor with a GitHub-style review note on every hunk: what changed, why, what to check. You read there and talk to the agent in chat as usual; it knows which hunk you are looking at.
 </p>
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="Side-by-side diff in VS Code with a reviewer note anchored to the first changed line, and the Code Review sidebar listing hunks by file" width="100%" />
+</p>
+
 <p align="center"><em>Forked from <a href="https://github.com/Royal-lobster/code-explainer">Royal-lobster/code-explainer</a>. The walkthrough, TTS and podcast modes were removed in favour of a reading-first review flow.</em></p>
 
 ---
@@ -43,6 +47,17 @@ Install the code review skill from https://github.com/SidharthK2/code-explainer
 <details>
 <summary>Manual installation</summary>
 
+### For a team
+
+Commit the skill into your repo so everyone who opens it with Claude Code has `/review` without installing anything:
+
+```bash
+git submodule add https://github.com/SidharthK2/code-explainer.git .claude/skills/review
+.claude/skills/review/setup.sh     # each person, once, for the extension
+```
+
+Then edit the `~/.claude/skills/review/` paths in `SKILL.md` to `.claude/skills/review/`, or symlink one to the other.
+
 ### Skill-native agents
 
 | Agent | Install command |
@@ -66,7 +81,7 @@ Clone anywhere, run `setup.sh`, then point the agent's rules at `SKILL.md` (Curs
 ### What setup.sh does
 
 - Checks git, Node.js, editor CLI, `jq`, `python3`
-- Lets you pick the `REVIEWER` model for large diffs (default `sonnet`)
+- Non-interactive. `./setup.sh --model opus` changes the `REVIEWER` model used for large diffs (default `sonnet`)
 - Builds the extension and installs the `.vsix` into every detected editor
 
 </details>

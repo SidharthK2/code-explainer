@@ -66,21 +66,21 @@ SKILL_FILE="$SCRIPT_DIR/SKILL.md"
 CURRENT_REVIEWER=$(sed -nE 's/^\| `REVIEWER` \| `([^`]+)`.*/\1/p' "$SKILL_FILE" | head -1)
 CURRENT_REVIEWER="${CURRENT_REVIEWER:-sonnet}"
 
-echo ""
-echo -e "  ${BOLD}REVIEWER${NC} — sub-agent for large diffs (400+ lines) : ${BLUE}$CURRENT_REVIEWER${NC}"
-echo -e "  Use any model name your agent supports."
-echo -ne "  ${BOLD}Keep this default?${NC} [Y/n] "
-read -r KEEP_MODEL </dev/tty
-
-if [[ "$KEEP_MODEL" =~ ^[Nn] ]]; then
-    echo -ne "  REVIEWER [$CURRENT_REVIEWER]: "
-    read -r NEW_REVIEWER </dev/tty
-    NEW_REVIEWER="${NEW_REVIEWER:-$CURRENT_REVIEWER}"
+# Non-interactive by default so a coding agent can run this script. Override with
+#   REVIEWER_MODEL=<name> ./setup.sh     or     ./setup.sh --model <name>
+NEW_REVIEWER="${REVIEWER_MODEL:-}"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --model) NEW_REVIEWER="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+if [[ -n "$NEW_REVIEWER" && "$NEW_REVIEWER" != "$CURRENT_REVIEWER" ]]; then
     NEW_REVIEWER=$(echo "$NEW_REVIEWER" | tr -d '`|\n' | xargs)
     sed -i.bak -E "s/^(\| \`REVIEWER\` \| )\`[^\`]+\`/\1\`$NEW_REVIEWER\`/" "$SKILL_FILE" && rm -f "$SKILL_FILE.bak"
     ok "REVIEWER → $NEW_REVIEWER (saved to SKILL.md)"
 else
-    ok "Using $CURRENT_REVIEWER"
+    ok "REVIEWER model for large diffs: $CURRENT_REVIEWER (change with --model <name>)"
 fi
 
 # ── Step 3: Build and install the extension ─────────────────────────────────
