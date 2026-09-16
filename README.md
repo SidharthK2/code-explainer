@@ -30,7 +30,7 @@
 - macOS or Linux with `git`
 - Node.js 18+
 - VS Code or Cursor with the CLI enabled (`code` or `cursor` command)
-- `jq` (the skill validates review JSON with it) and `python3` (for `review.sh reply`)
+- `jq` (the skill validates review JSON with it) and `python3` (for `review.sh resolve`)
 
 ## Installation
 
