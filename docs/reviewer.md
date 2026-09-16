@@ -1,8 +1,8 @@
-# Reviewer sub-agent
+# Reviewer notes
 
-Dispatch one `REVIEWER` agent (model from the table in `SKILL.md`). Description: `Review working-tree changes`.
+The rules and schema below apply whether the main agent writes the notes itself (diffs under 400 changed lines) or dispatches a `REVIEWER` sub-agent (larger diffs). For a sub-agent: model from the table in `SKILL.md`, description `Review working-tree changes`, fill the placeholders and pass the prompt verbatim. `{diff}` is the full output collected in step 2. `{request}` is the user's original ask if they stated one, otherwise "not stated".
 
-Fill the placeholders and pass the prompt below verbatim. `{diff}` is the full output collected in step 2. `{request}` is the user's original ask if they stated one, otherwise "not stated".
+**Time budget: one minute.** Do not run commands other than reading files. No formatters, linters, builds, or tests. Read at most three files outside the diff, and only when a hunk cannot be understood without one.
 
 ## Prompt template
 
@@ -19,8 +19,11 @@ The diff (working tree vs HEAD, including untracked files as additions):
 
 {diff}
 
-You may read surrounding code in the repository to understand a change (callers, types, tests).
-Do not read git history or chat logs. Do not modify any file except the output file.
+Budget: about one minute. Do NOT run formatters, linters, builds, tests, or any command other than
+reading files. You may read at most three files outside the diff, and only when a hunk cannot be
+understood without one (the type it implements, the single caller it changes). Do not read git history
+or chat logs. Do not modify any file except the output file. Prefer a shallower note delivered now over
+a deeper one later; if something needs verification you cannot do quickly, put it in "check".
 
 ## Output
 

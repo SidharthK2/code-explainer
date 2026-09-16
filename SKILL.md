@@ -17,9 +17,9 @@ Use `$BASE` everywhere the steps below say `HEAD`, and put it in the `base` fiel
 
 | Tier | Default | Role |
 |------|---------|------|
-| `REVIEWER` | `opus` | Independent reviewer sub-agent — reads the diff, writes the notes |
+| `REVIEWER` | `sonnet` | Sub-agent for large diffs only — reads the diff, writes the notes, runs nothing |
 
-Resolve the tier to the model name in this table when dispatching.
+Resolve the tier to the model name in this table when dispatching. Speed matters more than depth here: the user is waiting to read.
 
 ## Checklist
 
@@ -33,7 +33,9 @@ Resolve the tier to the model name in this table when dispatching.
    ```
    For each untracked file, include `git diff --no-index --unified=3 /dev/null <file>` so the reviewer sees its content. Skip untracked files that are clearly not part of the change (editor scratch, notes, lockfiles the user did not touch) and say so in one line at the end. If everything is empty, tell the user there is nothing to review and stop.
 
-3. **Dispatch the reviewer:** read `docs/reviewer.md` and dispatch **one** `REVIEWER` sub-agent with that prompt, the diff text, and the repo root. Create `TMPDIR=$(mktemp -d)` and have the agent write `$TMPDIR/review.json`. The reviewer is independent: do not pass it your own reasoning about the change, only the diff and the user's original request if they gave one.
+3. **Write the notes.** Read `docs/reviewer.md`. Create `TMPDIR=$(mktemp -d)`. Then pick by diff size (`git diff <base> --shortstat`, insertions + deletions):
+   - **Under 400 changed lines (most reviews):** write `$TMPDIR/review.json` yourself, now, following the rules and schema in `docs/reviewer.md`. No sub-agent. Do not run formatters, linters, builds, or tests. Do not read files that are not in the diff unless a hunk is unreadable without one, and cap that at three reads. Target: the review is in the sidebar within a minute of the user asking.
+   - **400 lines or more:** dispatch **one** `REVIEWER` sub-agent with the prompt in `docs/reviewer.md`, the diff text, and the repo root, writing to `$TMPDIR/review.json`. Pass only the diff and the user's original request, not your own reasoning about the change.
 
 4. **Validate and send:**
    ```bash
@@ -64,6 +66,8 @@ Resolve the tier to the model name in this table when dispatching.
 | No terminal narration when the extension is up | The user chose to read in the diff. Terminal output is for the one-line "review is open" and the finish summary. |
 | Answers go in the thread | `reply` for questions, `resolve` for fixes. |
 | `resolve` only after the fix is applied and the diff re-checked | Threads say "fixed" to the user; make it true. |
-| Reviewer gets the diff, not your intent | Independence is the point. If the user stated what they asked for, pass that; never pass your own explanation of the change. |
+| Reviewer gets the diff, not your intent | When a sub-agent is used, pass the diff and the user's request; never your own explanation of the change. |
+| Never run the project's tooling to review | Formatters, linters, builds and tests turn a one-minute review into a six-minute one. If formatting looks off, say so in a `check` and let the user run the formatter. |
+| Latency is a feature | The user asked to read, and is waiting. A shallower review delivered in a minute beats a thorough one in six. |
 
 **First-time setup?** Read `docs/setup.md`.

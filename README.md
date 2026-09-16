@@ -22,7 +22,7 @@
 - **One thread per change** — A GitHub-style comment thread anchored to each hunk with fixed fields: **what changed**, **why**, **check**. Tagged `info`, `attention`, or `risk`.
 - **Ordered pass** — The reviewer orders hunks as a story: entry point first, dependencies next, tests and config last. `Ctrl+Shift+]` steps through and marks the hunk reviewed.
 - **Ask and flag** — Type in a thread and press **Ask agent** or **Flag for fix**. The answer lands in the thread. A fix gets applied, the thread moves to the new lines and shows as fixed.
-- **Independent reviewer** — A fresh sub-agent sees only the diff and your original request, not the writing agent's reasoning.
+- **Fast** — Small diffs are annotated directly by the agent that already has the diff, no sub-agent, no tooling runs. Diffs over 400 lines go to a Sonnet sub-agent that reads only the diff and is capped at three extra file reads.
 - **Minimal sidebar** — Change-set summary, progress, and a per-file hunk list with severity dots and reviewed checkboxes. Finish review hands the result back to the agent.
 
 ## Requirements
@@ -66,7 +66,7 @@ Clone anywhere, run `setup.sh`, then point the agent's rules at `SKILL.md` (Curs
 ### What setup.sh does
 
 - Checks git, Node.js, editor CLI, `jq`, `python3`
-- Lets you pick the `REVIEWER` model (default `opus`)
+- Lets you pick the `REVIEWER` model for large diffs (default `sonnet`)
 - Builds the extension and installs the `.vsix` into every detected editor
 
 </details>
@@ -84,7 +84,7 @@ or naturally: "review what you just changed", "check the diff before I commit".
 What happens:
 
 1. The agent collects `git diff HEAD` plus untracked files.
-2. A fresh `REVIEWER` sub-agent reads the diff and writes ordered hunk notes as JSON.
+2. The agent writes ordered hunk notes as JSON, itself for small diffs or via a `REVIEWER` sub-agent for large ones.
 3. The extension opens the first file's diff, creates a comment thread per hunk, and shows the summary in the sidebar.
 4. You step through. Ask or flag from any thread. The agent long-polls for your actions and replies in place.
 5. **Finish review** returns control to the agent, which prints a short wrap-up of flagged and fixed items.

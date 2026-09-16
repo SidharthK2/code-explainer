@@ -64,10 +64,10 @@ header "Configure reviewer model"
 
 SKILL_FILE="$SCRIPT_DIR/SKILL.md"
 CURRENT_REVIEWER=$(sed -nE 's/^\| `REVIEWER` \| `([^`]+)`.*/\1/p' "$SKILL_FILE" | head -1)
-CURRENT_REVIEWER="${CURRENT_REVIEWER:-opus}"
+CURRENT_REVIEWER="${CURRENT_REVIEWER:-sonnet}"
 
 echo ""
-echo -e "  ${BOLD}REVIEWER${NC} — independent reviewer sub-agent : ${BLUE}$CURRENT_REVIEWER${NC}"
+echo -e "  ${BOLD}REVIEWER${NC} — sub-agent for large diffs (400+ lines) : ${BLUE}$CURRENT_REVIEWER${NC}"
 echo -e "  Use any model name your agent supports."
 echo -ne "  ${BOLD}Keep this default?${NC} [Y/n] "
 read -r KEEP_MODEL </dev/tty
