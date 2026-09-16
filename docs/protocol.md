@@ -15,8 +15,7 @@ so a window reload leaves the new instance reachable.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/health` | `{"status":"ok","workspaceRoot":"/abs/path"}` when the extension is up. Check that the root is the repo you are reviewing |
-| GET | `/api/state` | Status, current hunk (full object), reviewed count, flagged ids, and a compact list of all hunks with their reviewed / flagged / resolved state |
-| GET | `/api/actions?timeout=N` | Long-poll for the next user action. `204` on timeout (`review.sh` prints `{}`) |
+| GET | `/api/state` | Status, base, current hunk (full object), reviewed count, and a compact list of all hunks with their reviewed / resolved state. This is how the agent knows what "this hunk" means in chat |
 | POST | `/api/message` | One agent message (below). `400` with an `error` string when the schema is wrong |
 
 ## Agent → extension messages
@@ -59,28 +58,17 @@ so a window reload leaves the new instance reachable.
 | `goto` | `hunkId` | Opens that hunk's diff and expands its thread |
 | `update_hunk` | `id`, `hunk` (partial) | Patches fields, moves the thread if the range changed. Use after a fix shifts lines |
 | `remove_hunks` | `ids` | Deletes threads and list entries |
-| `reply` | `hunkId`, `text` (markdown) | Posts a comment authored "Agent" into the thread |
-| `resolve` | `hunkId`, `text?` | Posts the optional comment, marks the thread resolved and the hunk fixed |
+| `resolve` | `hunkId`, `text?` | Marks the thread resolved and the hunk fixed, showing `text` (one line, default "Fixed.") under the reviewer note |
 | `close` | | Ends the review, removes threads and decorations |
 
 ## Extension → agent
 
-### `user_action` (from `/api/actions`)
-
-```json
-{ "type": "user_action", "action": "ask_question", "hunkId": 3, "text": "Why 30 seconds?", "file": "/abs/path.ts", "start": 12, "end": 41 }
-{ "type": "user_action", "action": "flag",         "hunkId": 3, "text": "Read this from config instead", "file": "...", "start": 12, "end": 41 }
-{ "type": "user_action", "action": "finish" }
-```
-
-- `ask_question`: the user typed in the thread and pressed **Ask agent**.
-- `flag`: the user pressed **Flag for fix**. The hunk shows as flagged until you `resolve` it.
-- `finish`: the user pressed **Finish review** in the sidebar (or `Ctrl+Shift+Enter`).
+There are no user actions. Threads are read-only; the user talks to the agent in chat, and the agent reads `/api/state` to know which hunk they mean.
 
 ### `state` (WebSocket broadcast and `/api/state`)
 
 ```json
-{ "type": "state", "status": "active", "currentHunk": 3, "totalHunks": 9, "reviewedCount": 2, "flaggedHunks": [3] }
+{ "type": "state", "status": "active", "currentHunk": 3, "totalHunks": 9, "reviewedCount": 2 }
 ```
 
 `status` is `idle`, `active`, or `closed`.
@@ -88,5 +76,5 @@ so a window reload leaves the new instance reachable.
 ## Reviewer-side behaviour worth knowing
 
 - **Next** (`Ctrl+Shift+]`, sidebar button) marks the current hunk reviewed before moving on. **Prev**, clicking in the list, and `goto` do not.
-- The checkbox in the sidebar list and the check icon on a thread toggle reviewed by hand.
+- The checkbox in the sidebar list and the check icon on a thread toggle reviewed by hand. Threads have no reply box.
 - The diff editor's right side is the real file, so the user can edit while reviewing. Threads follow edits within an open document; ranges in `/api/state` are the ones you sent, not live positions.

@@ -64,10 +64,9 @@
 
 		const total = state.hunks.length;
 		const reviewed = state.hunks.filter((h) => h.reviewed).length;
-		const flagged = state.hunks.filter((h) => h.flagged).length;
 		$("progress-fill").style.width = total ? `${Math.round((reviewed / total) * 100)}%` : "0%";
-		$("progress-text").textContent =
-			`${reviewed}/${total} reviewed` + (flagged ? ` · ${flagged} flagged` : "");
+		const fixed = state.hunks.filter((h) => h.resolved).length;
+		$("progress-text").textContent = `${reviewed}/${total} reviewed` + (fixed ? ` · ${fixed} fixed` : "");
 
 		const idx = state.hunks.findIndex((h) => h.id === state.currentHunk);
 		/** @type {HTMLButtonElement} */ ($("btn-prev")).disabled = idx <= 0;
@@ -95,7 +94,6 @@
 			li.className = "hunk" +
 				(hunk.id === state.currentHunk ? " current" : "") +
 				(hunk.reviewed ? " reviewed" : "") +
-				(hunk.flagged ? " flagged" : "") +
 				(hunk.resolved ? " resolved" : "");
 
 			const check = document.createElement("button");
@@ -121,9 +119,7 @@
 			const meta = document.createElement("div");
 			meta.className = "hunk-meta";
 			const range = hunk.start === hunk.end ? `L${hunk.start}` : `L${hunk.start}–${hunk.end}`;
-			let status = "";
-			if (hunk.resolved) status = " · fixed";
-			else if (hunk.flagged) status = " · flagged";
+			const status = hunk.resolved ? " · fixed" : "";
 			meta.textContent = `${range}${hunk.kind === "deleted" ? " · deletion" : ""}${status}`;
 			body.appendChild(title);
 			body.appendChild(meta);
@@ -141,7 +137,6 @@
 
 	$("btn-prev").addEventListener("click", () => vscode.postMessage({ type: "prev" }));
 	$("btn-next").addEventListener("click", () => vscode.postMessage({ type: "next" }));
-	$("btn-finish").addEventListener("click", () => vscode.postMessage({ type: "finish" }));
 	$("btn-close").addEventListener("click", () => vscode.postMessage({ type: "close" }));
 
 	window.addEventListener("message", (event) => {

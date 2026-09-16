@@ -87,34 +87,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		}
 	});
 
-	// ── Comment-thread commands (reply box buttons and thread title actions) ──
-
-	function queueFromThread(reply: vscode.CommentReply, action: "ask_question" | "flag"): void {
-		const id = comments.hunkIdOf(reply.thread);
-		const hunk = id !== undefined ? review.getHunk(id) : undefined;
-		if (id === undefined || !hunk) return;
-		const text = reply.text.trim();
-		if (!text) return;
-		comments.addUserComment(id, text, action === "flag" ? "flag" : "question");
-		if (action === "flag") review.flag(id);
-		server.queueAction({
-			type: "user_action",
-			action,
-			hunkId: id,
-			text,
-			file: hunk.file,
-			start: hunk.start,
-			end: hunk.end,
-		});
-	}
+	// ── Commands (thread title action, keybindings, palette) ──
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand("codeReviewer.askAgent", (reply: vscode.CommentReply) =>
-			queueFromThread(reply, "ask_question"),
-		),
-		vscode.commands.registerCommand("codeReviewer.flagHunk", (reply: vscode.CommentReply) =>
-			queueFromThread(reply, "flag"),
-		),
 		vscode.commands.registerCommand("codeReviewer.markReviewed", (thread: vscode.CommentThread) => {
 			const id = comments.hunkIdOf(thread);
 			if (id !== undefined) review.toggleReviewed(id);
@@ -124,11 +99,6 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 		vscode.commands.registerCommand("codeReviewer.prev", () => {
 			review.prev();
-		}),
-		vscode.commands.registerCommand("codeReviewer.finish", () => {
-			if (review.getState().status !== "active") return;
-			server.queueAction({ type: "user_action", action: "finish" });
-			vscode.window.setStatusBarMessage("Code Review: handed back to the agent", 3000);
 		}),
 		vscode.commands.registerCommand("codeReviewer.close", () => {
 			review.close();
@@ -186,11 +156,8 @@ export function activate(context: vscode.ExtensionContext): void {
 				comments.remove(msg.ids);
 				review.removeHunks(msg.ids);
 				break;
-			case "reply":
-				comments.addAgentReply(msg.hunkId, msg.text);
-				break;
 			case "resolve":
-				if (msg.text && msg.text.trim()) comments.addAgentReply(msg.hunkId, msg.text);
+				comments.setFixNote(msg.hunkId, msg.text?.trim() || "Fixed.");
 				review.resolve(msg.hunkId);
 				break;
 			case "close":
@@ -214,9 +181,6 @@ export function activate(context: vscode.ExtensionContext): void {
 				break;
 			case "toggle_reviewed":
 				review.toggleReviewed(msg.hunkId);
-				break;
-			case "finish":
-				vscode.commands.executeCommand("codeReviewer.finish");
 				break;
 			case "close":
 				review.close();

@@ -104,7 +104,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 					Next
 					<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M6 2l6 6-6 6V2z"/></svg>
 				</button>
-				<button id="btn-finish" class="finish-btn" title="Hand the review back to the agent">Finish review</button>
 			</div>
 		</div>
 

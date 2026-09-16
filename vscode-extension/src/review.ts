@@ -10,7 +10,7 @@ export interface ReviewState {
 	status: ReviewStatus;
 }
 
-const freshState = (): HunkState => ({ reviewed: false, flagged: false, resolved: false });
+const freshState = (): HunkState => ({ reviewed: false, resolved: false });
 
 /**
  * Holds the review plan, per-hunk reviewer state, and the current position.
@@ -128,18 +128,9 @@ export class Review extends EventEmitter {
 		this.setReviewed(id, !s.reviewed);
 	}
 
-	flag(id: number): void {
-		const s = this.states.get(id);
-		if (!s) return;
-		s.flagged = true;
-		s.resolved = false;
-		this.emit("review", this.getState());
-	}
-
 	resolve(id: number): void {
 		const s = this.states.get(id);
 		if (!s) return;
-		s.flagged = false;
 		s.resolved = true;
 		this.emit("review", this.getState());
 	}
@@ -177,9 +168,5 @@ export class Review extends EventEmitter {
 		let n = 0;
 		for (const s of this.states.values()) if (s.reviewed) n++;
 		return n;
-	}
-
-	flaggedIds(): number[] {
-		return this.hunks.filter((h) => this.states.get(h.id)?.flagged).map((h) => h.id);
 	}
 }

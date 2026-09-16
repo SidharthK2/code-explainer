@@ -20,7 +20,7 @@ function noteBody(hunk: Hunk, state: HunkState): vscode.MarkdownString {
 	const md = new vscode.MarkdownString(undefined, true);
 	md.isTrusted = false;
 	const badge = `${SEVERITY_ICON[hunk.severity]} **${SEVERITY_LABEL[hunk.severity]}**`;
-	const status = state.resolved ? " · fixed" : state.flagged ? " · flagged" : "";
+	const status = state.resolved ? " · fixed" : "";
 	md.appendMarkdown(`### ${hunk.title}\n\n${badge}${status}\n\n`);
 	md.appendMarkdown(`**What changed**\n\n${hunk.what.trim()}\n\n`);
 	md.appendMarkdown(`**Why**\n\n${hunk.why.trim()}\n\n`);
@@ -30,21 +30,9 @@ function noteBody(hunk: Hunk, state: HunkState): vscode.MarkdownString {
 	return md;
 }
 
-function plainComment(author: string, text: string, contextValue: string): vscode.Comment {
-	const body = new vscode.MarkdownString(text, true);
-	body.isTrusted = false;
-	return {
-		body,
-		mode: vscode.CommentMode.Preview,
-		author: { name: author },
-		contextValue,
-	};
-}
-
 /**
- * One comment thread per hunk, anchored on the modified side of the diff editor.
- * The first comment is the reviewer note; later comments are the user's questions or flags
- * and the agent's replies.
+ * One read-only comment thread per hunk, anchored on the modified side of the diff editor.
+ * It holds the reviewer note and, after a fix, a one-line "fixed" note. Conversations happen in chat.
  */
 export class ReviewComments {
 	private controller: vscode.CommentController;
@@ -52,10 +40,6 @@ export class ReviewComments {
 
 	constructor() {
 		this.controller = vscode.comments.createCommentController(CONTROLLER_ID, "Code Review");
-		this.controller.options = {
-			prompt: "Ask the agent a question, or flag this hunk for a fix",
-			placeHolder: "Type here, then choose Ask or Flag",
-		};
 	}
 
 	setReview(hunks: Hunk[], stateOf: (id: number) => HunkState, currentId: number | undefined): void {
@@ -73,7 +57,7 @@ export class ReviewComments {
 			},
 		]);
 		thread.label = SEVERITY_LABEL[hunk.severity];
-		thread.canReply = true;
+		thread.canReply = false;
 		thread.contextValue = `hunk:${hunk.id}`;
 		thread.collapsibleState = active
 			? vscode.CommentThreadCollapsibleState.Expanded
@@ -110,19 +94,16 @@ export class ReviewComments {
 			: vscode.CommentThreadState.Unresolved;
 	}
 
-	addUserComment(id: number, text: string, kind: "question" | "flag"): void {
+	/** Append the agent's one-line fix note. Only ever one per thread; a second call replaces it. */
+	setFixNote(id: number, text: string): void {
 		const thread = this.threads.get(id);
 		if (!thread) return;
-		const prefix = kind === "flag" ? "$(tools) **Flag:** " : "$(question) ";
-		thread.comments = [...thread.comments, plainComment("You", prefix + text, `user-${kind}`)];
-		thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-	}
-
-	addAgentReply(id: number, text: string): void {
-		const thread = this.threads.get(id);
-		if (!thread) return;
-		thread.comments = [...thread.comments, plainComment("Agent", text, "agent-reply")];
-		thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+		const body = new vscode.MarkdownString(`$(check) ${text}`, true);
+		body.isTrusted = false;
+		thread.comments = [
+			thread.comments[0],
+			{ body, mode: vscode.CommentMode.Preview, author: { name: "Agent" }, contextValue: "fix-note" },
+		];
 	}
 
 	remove(ids: number[]): void {

@@ -22,27 +22,17 @@
 		"commands": [
 			{ "command": "codeReviewer.next", "title": "Code Review: Next Hunk" },
 			{ "command": "codeReviewer.prev", "title": "Code Review: Previous Hunk" },
-			{ "command": "codeReviewer.finish", "title": "Code Review: Finish Review" },
 			{ "command": "codeReviewer.close", "title": "Code Review: Close Review" },
-			{ "command": "codeReviewer.askAgent", "title": "Ask agent", "enablement": "!commentIsEmpty" },
-			{ "command": "codeReviewer.flagHunk", "title": "Flag for fix", "enablement": "!commentIsEmpty" },
 			{ "command": "codeReviewer.markReviewed", "title": "Toggle reviewed", "icon": "$(check)" }
 		],
 		"keybindings": [
 			{ "command": "codeReviewer.next", "key": "ctrl+shift+]", "when": "codeReviewer.reviewActive" },
 			{ "command": "codeReviewer.prev", "key": "ctrl+shift+[", "when": "codeReviewer.reviewActive" },
-			{ "command": "codeReviewer.finish", "key": "ctrl+shift+enter", "when": "codeReviewer.reviewActive && !commentEditorFocused" },
 			{ "command": "codeReviewer.close", "key": "ctrl+shift+\\", "when": "codeReviewer.reviewActive" }
 		],
 		"menus": {
 			"commandPalette": [
-				{ "command": "codeReviewer.askAgent", "when": "false" },
-				{ "command": "codeReviewer.flagHunk", "when": "false" },
 				{ "command": "codeReviewer.markReviewed", "when": "false" }
-			],
-			"comments/commentThread/context": [
-				{ "command": "codeReviewer.askAgent", "group": "inline@1", "when": "commentController == codeReviewer" },
-				{ "command": "codeReviewer.flagHunk", "group": "inline@2", "when": "commentController == codeReviewer" }
 			],
 			"comments/commentThread/title": [
 				{ "command": "codeReviewer.markReviewed", "group": "navigation", "when": "commentController == codeReviewer" }

@@ -25,7 +25,7 @@ export interface Hunk {
 
 export interface HunkState {
 	reviewed: boolean;
-	flagged: boolean;
+	/** The agent fixed this hunk after the user asked in chat. */
 	resolved: boolean;
 }
 
@@ -59,14 +59,7 @@ export interface RemoveHunksMessage {
 	ids: number[];
 }
 
-/** Agent posts a comment into a hunk's thread (answers to questions land here, not in the terminal). */
-export interface ReplyMessage {
-	type: "reply";
-	hunkId: number;
-	text: string;
-}
-
-/** Agent marks a flagged hunk as fixed; optional text is posted as the closing comment. */
+/** Agent marks a hunk as fixed; optional one-line note is shown under the reviewer note. */
 export interface ResolveMessage {
 	type: "resolve";
 	hunkId: number;
@@ -82,7 +75,6 @@ export type AgentMessage =
 	| GotoMessage
 	| UpdateHunkMessage
 	| RemoveHunksMessage
-	| ReplyMessage
 	| ResolveMessage
 	| CloseMessage;
 
@@ -94,22 +86,9 @@ export interface StateMessage {
 	currentHunk: number;
 	totalHunks: number;
 	reviewedCount: number;
-	flaggedHunks: number[];
 }
 
-export type UserActionKind = "ask_question" | "flag" | "finish";
-
-export interface UserActionMessage {
-	type: "user_action";
-	action: UserActionKind;
-	hunkId?: number;
-	text?: string;
-	file?: string;
-	start?: number;
-	end?: number;
-}
-
-export type ExtensionMessage = StateMessage | UserActionMessage;
+export type ExtensionMessage = StateMessage;
 
 // ── Extension ↔ Webview messages ──
 
@@ -145,10 +124,6 @@ export interface WebviewToggleReviewedMessage {
 	hunkId: number;
 }
 
-export interface WebviewFinishMessage {
-	type: "finish";
-}
-
 export interface WebviewCloseMessage {
 	type: "close";
 }
@@ -158,5 +133,4 @@ export type FromWebviewMessage =
 	| WebviewNextMessage
 	| WebviewPrevMessage
 	| WebviewToggleReviewedMessage
-	| WebviewFinishMessage
 	| WebviewCloseMessage;

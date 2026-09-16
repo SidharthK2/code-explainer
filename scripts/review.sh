@@ -5,9 +5,7 @@
 #   review.sh review <json_file>        Send a set_review message from a file
 #   review.sh send <json_string>        Send a raw JSON message
 #   review.sh state                     Current review state (includes current hunk)
-#   review.sh wait-action [timeout]     Long-poll for a user action (default 60s). Prints {} on timeout
-#   review.sh reply <hunk_id> <text>    Post a comment into a hunk's thread
-#   review.sh resolve <hunk_id> [text]  Mark a flagged hunk fixed, optionally with a closing comment
+#   review.sh resolve <hunk_id> [text]  Mark a hunk fixed, with a one-line note shown under the reviewer note
 #   review.sh goto <hunk_id>            Move the reviewer to a hunk
 #   review.sh close                     Close the review
 
@@ -86,17 +84,6 @@ case "$1" in
     state)
         curl -s -H "$AUTH_HEADER" "$BASE/api/state"
         ;;
-    wait-action)
-        TIMEOUT="${2:-60}"
-        OUT=$(curl -s -w '\n%{http_code}' --max-time "$((TIMEOUT + 5))" -H "$AUTH_HEADER" "$BASE/api/actions?timeout=$TIMEOUT")
-        CODE=$(echo "$OUT" | tail -1)
-        BODY=$(echo "$OUT" | sed '$d')
-        if [ "$CODE" = "204" ] || [ -z "$BODY" ]; then echo '{}'; else echo "$BODY"; fi
-        ;;
-    reply)
-        [ -z "$2" ] || [ -z "$3" ] && { echo "Usage: review.sh reply <hunk_id> <text>" >&2; exit 1; }
-        post -d "{\"type\":\"reply\",\"hunkId\":$2,\"text\":$(json_str "$3")}"
-        ;;
     resolve)
         [ -z "$2" ] && { echo "Usage: review.sh resolve <hunk_id> [text]" >&2; exit 1; }
         if [ -n "$3" ]; then
@@ -113,7 +100,7 @@ case "$1" in
         post -d '{"type":"close"}'
         ;;
     *)
-        sed -n '2,13p' "$0" >&2
+        sed -n '2,11p' "$0" >&2
         exit 1
         ;;
 esac

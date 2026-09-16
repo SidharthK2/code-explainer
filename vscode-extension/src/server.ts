@@ -5,7 +5,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { WebSocketServer, WebSocket } from "ws";
 import type { Review } from "./review";
-import type { AgentMessage, ExtensionMessage, UserActionMessage } from "./types";
+import type { AgentMessage, ExtensionMessage } from "./types";
 
 export const PORT_FILE = path.join(os.homedir(), ".claude-reviewer-port");
 export const TOKEN_FILE = path.join(os.homedir(), ".claude-reviewer-token");
@@ -17,7 +17,6 @@ export function endpointFileFor(workspaceRoot: string): string {
 	return path.join(ENDPOINTS_DIR, `${key}.json`);
 }
 const MAX_BODY_SIZE = 4 * 1024 * 1024; // 4MB — a review of a large diff can be sizeable
-const MAX_LONG_POLL_TIMEOUT = 120_000;
 
 const SEVERITIES = new Set(["info", "attention", "risk"]);
 
@@ -42,8 +41,6 @@ export class ReviewServer {
 	private wss: WebSocketServer;
 	private review: Review;
 	private wsClients: Set<WebSocket> = new Set();
-	private pendingActions: UserActionMessage[] = [];
-	private actionWaiters: Array<(action: UserActionMessage) => void> = [];
 	private port = 0;
 	private authToken: string;
 	private onAgentMessage?: (msg: AgentMessage) => void;
@@ -134,14 +131,6 @@ export class ReviewServer {
 		if (globalMissing || mineMissing) this.writeEndpointFiles();
 	}
 
-	/** Queue a user action for the agent (delivered via long-poll or WS). */
-	queueAction(action: UserActionMessage): void {
-		const waiter = this.actionWaiters.shift();
-		if (waiter) waiter(action);
-		else this.pendingActions.push(action);
-		this.broadcastToClients(action);
-	}
-
 	stateMessage(): ExtensionMessage {
 		const state = this.review.getState();
 		return {
@@ -150,7 +139,6 @@ export class ReviewServer {
 			currentHunk: state.hunks[state.currentIndex]?.id ?? -1,
 			totalHunks: state.hunks.length,
 			reviewedCount: this.review.reviewedCount(),
-			flaggedHunks: this.review.flaggedIds(),
 		};
 	}
 
@@ -196,10 +184,6 @@ export class ReviewServer {
 			res.end(JSON.stringify({ status: "ok", workspaceRoot: this.workspaceRoot }));
 		} else if (req.method === "GET" && url.pathname === "/api/state") {
 			this.handleGetState(res);
-		} else if (req.method === "GET" && url.pathname === "/api/actions") {
-			const rawTimeout = parseInt(url.searchParams.get("timeout") || "30", 10) * 1000;
-			const timeout = Math.min(Math.max(rawTimeout, 1000), MAX_LONG_POLL_TIMEOUT);
-			this.handleGetActions(res, timeout);
 		} else if (req.method === "POST" && url.pathname === "/api/message") {
 			this.readBody(req, res, (body) => {
 				let msg: unknown;
@@ -237,40 +221,11 @@ export class ReviewServer {
 				base: state.base,
 				currentIndex: state.currentIndex,
 				hunk: current,
-				hunks: state.hunks.map(({ id, file, start, end, title, severity, reviewed, flagged, resolved }) => ({
-					id, file, start, end, title, severity, reviewed, flagged, resolved,
+				hunks: state.hunks.map(({ id, file, start, end, title, severity, reviewed, resolved }) => ({
+					id, file, start, end, title, severity, reviewed, resolved,
 				})),
 			}),
 		);
-	}
-
-	private handleGetActions(res: http.ServerResponse, timeout: number): void {
-		const action = this.pendingActions.shift();
-		if (action) {
-			res.writeHead(200);
-			res.end(JSON.stringify(action));
-			return;
-		}
-
-		const timer = setTimeout(() => {
-			const idx = this.actionWaiters.indexOf(waiter);
-			if (idx !== -1) this.actionWaiters.splice(idx, 1);
-			res.writeHead(204);
-			res.end();
-		}, timeout);
-
-		const waiter = (a: UserActionMessage) => {
-			clearTimeout(timer);
-			res.writeHead(200);
-			res.end(JSON.stringify(a));
-		};
-		this.actionWaiters.push(waiter);
-
-		res.on("close", () => {
-			clearTimeout(timer);
-			const idx = this.actionWaiters.indexOf(waiter);
-			if (idx !== -1) this.actionWaiters.splice(idx, 1);
-		});
 	}
 
 	// ── WebSocket ──
@@ -319,10 +274,6 @@ export class ReviewServer {
 				return null;
 			case "remove_hunks":
 				return Array.isArray(m.ids) ? null : "remove_hunks: 'ids' must be an array";
-			case "reply":
-				if (typeof m.hunkId !== "number") return "reply: 'hunkId' must be a number";
-				if (typeof m.text !== "string" || !m.text.trim()) return "reply: 'text' must be a non-empty string";
-				return null;
 			case "resolve":
 				if (typeof m.hunkId !== "number") return "resolve: 'hunkId' must be a number";
 				if (m.text !== undefined && typeof m.text !== "string") return "resolve: 'text' must be a string";

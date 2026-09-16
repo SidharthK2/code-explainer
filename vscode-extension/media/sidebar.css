@@ -197,17 +197,6 @@ code {
 	cursor: default;
 }
 
-.controls .finish-btn {
-	margin-left: auto;
-	background: var(--vscode-button-background);
-	color: var(--vscode-button-foreground);
-	border-color: var(--vscode-button-background);
-}
-
-.controls .finish-btn:hover {
-	background: var(--vscode-button-hoverBackground);
-}
-
 /* ── Hunk list ── */
 
 .hunk-list {
@@ -255,11 +244,6 @@ code {
 
 .hunk.reviewed .hunk-title {
 	opacity: 0.6;
-}
-
-.hunk.flagged .hunk-meta {
-	color: var(--vscode-editorWarning-foreground);
-	opacity: 1;
 }
 
 .hunk.resolved .hunk-meta {
