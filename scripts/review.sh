@@ -32,13 +32,29 @@ if command -v shasum &>/dev/null; then
         fi
     fi
 fi
-if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
-    if [ ! -f "$PORT_FILE" ] || [ ! -f "$TOKEN_FILE" ]; then
-        echo "{\"error\": \"Code Review extension not running for $ROOT. Is that folder open in VS Code with the Code Review extension installed? If the window just reloaded, wait 20s and retry.\"}" >&2
-        exit 1
+# No window serves this repo: open one and wait for its extension to register.
+# Set REVIEW_NO_OPEN=1 to disable. Never falls back to another repo's window.
+if [ -z "$PORT" ] && [ -z "$REVIEW_NO_OPEN" ] && [ -n "${EP_FILE:-}" ]; then
+    EDITOR_CLI=""
+    for c in ${REVIEW_EDITOR:-code cursor}; do command -v "$c" &>/dev/null && { EDITOR_CLI="$c"; break; }; done
+    if [ -n "$EDITOR_CLI" ]; then
+        "$EDITOR_CLI" "$ROOT" >/dev/null 2>&1
+        for _ in $(seq 1 40); do
+            sleep 0.5
+            if [ -f "$EP_FILE" ]; then
+                PORT=$(sed -nE 's/.*"port":([0-9]+).*/\1/p' "$EP_FILE")
+                TOKEN=$(sed -nE 's/.*"token":"([0-9a-f]+)".*/\1/p' "$EP_FILE")
+                if curl -sf --max-time 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+                    break
+                fi
+                PORT=""; TOKEN=""
+            fi
+        done
     fi
-    PORT=$(cat "$PORT_FILE")
-    TOKEN=$(cat "$TOKEN_FILE")
+fi
+if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
+    echo "{\"error\": \"Code Review extension not running for $ROOT. Open that folder in VS Code (extension installed and window reloaded), or check that the 'code' CLI is on PATH so review.sh can open it for you.\"}" >&2
+    exit 1
 fi
 BASE="http://127.0.0.1:$PORT"
 AUTH_HEADER="Authorization: Bearer $TOKEN"

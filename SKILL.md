@@ -23,7 +23,7 @@ Resolve the tier to the model name in this table when dispatching.
 
 ## Checklist
 
-1. **Health check (Bash):** run from inside the repo: `~/.claude/skills/review/scripts/review.sh health` — prints `{"status":"ok","workspaceRoot":"..."}` when the extension is running. The script targets the VS Code window whose workspace is this repo; if `workspaceRoot` is a different directory, set `REVIEW_ROOT=<repo root>` or ask the user to open the repo in VS Code. If the check fails, use the terminal fallback in step 5.
+1. **Health check (Bash):** run from inside the repo: `~/.claude/skills/review/scripts/review.sh health` — prints `{"status":"ok","workspaceRoot":"..."}` when the extension is running. The script targets the VS Code window whose workspace is this repo, and opens one (`code <repo root>`) if none exists, so the first call can take a few seconds. If `workspaceRoot` is a different directory, set `REVIEW_ROOT=<repo root>`. If the check fails, use the terminal fallback in step 5.
 
 2. **Collect the diff (Bash):**
    ```bash

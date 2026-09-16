@@ -89,7 +89,7 @@ What happens:
 4. You step through. Ask or flag from any thread. The agent long-polls for your actions and replies in place.
 5. **Finish review** returns control to the agent, which prints a short wrap-up of flagged and fixed items.
 
-If the extension is not running, the agent prints the review as text in the terminal instead.
+The repo does not need to be open in VS Code beforehand: if no window serves it, the helper opens one. If VS Code cannot be reached at all, the agent prints the review as text in the terminal instead.
 
 ### In the diff
 

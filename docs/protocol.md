@@ -4,7 +4,9 @@ The extension runs an HTTP + WebSocket server on `127.0.0.1`, one per VS Code wi
 `~/.claude-reviewer/endpoints/<sha1 of workspace root>.json` (`{port, token, root, pid}`) plus the global
 fallback files `~/.claude-reviewer-port` and `~/.claude-reviewer-token` (last window to activate wins).
 `scripts/review.sh` picks the endpoint whose root matches `git rev-parse --show-toplevel` of the current
-directory (override with `REVIEW_ROOT=/path`), and falls back to the global files. It wraps every call below.
+directory (override with `REVIEW_ROOT=/path`). When no window serves that repo it opens one with the `code` (or
+`cursor`) CLI and waits up to 20s for the extension to register; set `REVIEW_NO_OPEN=1` to disable, `REVIEW_EDITOR=cursor`
+to prefer Cursor. It never sends to a window serving a different repo. It wraps every call below.
 An instance only deletes files that point at itself, and rewrites its own every 15 seconds if they go missing,
 so a window reload leaves the new instance reachable.
 
